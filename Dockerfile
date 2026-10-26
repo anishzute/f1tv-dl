@@ -1,17 +1,25 @@
-FROM debian:buster-slim
+# syntax=docker/dockerfile:1
+FROM python:3.12-slim-bookworm
 
-RUN apt-get update
-RUN apt-get install -y curl
-RUN curl -fsSL https://deb.nodesource.com/setup_14.x | bash -
-RUN apt-get update
-RUN apt-get install -y nodejs
-RUN apt-get install -y ca-certificates fonts-liberation libappindicator3-1 libasound2 libatk-bridge2.0-0 libatk1.0-0 libc6 libcairo2 libcups2 libdbus-1-3 libexpat1 libfontconfig1 libgbm1 libgcc1 libglib2.0-0 libgtk-3-0 libnspr4 libnss3 libpango-1.0-0 libpangocairo-1.0-0 libstdc++6 libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxcursor1 libxdamage1 libxext6 libxfixes3 libxi6 libxrandr2 libxrender1 libxss1 libxtst6 lsb-release wget xdg-utils 
-RUN apt-get install -y ffmpeg
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /f1tv
-COPY . /f1tv
+WORKDIR /app
+COPY pyproject.toml README.md LICENSE ./
+COPY f1tv_dl ./f1tv_dl
+# Optional CA bundle for builds behind a trusted corporate or session proxy.
+RUN --mount=type=secret,id=proxy_ca \
+    if [ -f /run/secrets/proxy_ca ]; then \
+        PIP_CERT=/run/secrets/proxy_ca pip install --no-cache-dir .; \
+    else \
+        pip install --no-cache-dir .; \
+    fi
 
-# --unsafe-perm is required for preinstall script in package.json
-RUN npm i --omit=dev --unsafe-perm
-
-ENTRYPOINT [ "/bin/sh", "run.sh" ]
+RUN useradd --uid 10001 --create-home f1tv \
+    && mkdir -p /download /cache \
+    && chown f1tv:f1tv /download /cache
+ENV XDG_CACHE_HOME=/cache
+USER f1tv
+WORKDIR /download
+ENTRYPOINT ["f1tv-dl"]

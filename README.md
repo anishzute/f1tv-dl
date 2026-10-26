@@ -1,83 +1,173 @@
 # f1tv-dl
 
-Watch videos locally from f1tv website
+A Python command-line client for listing F1 TV feeds, resolving authorized playback
+URLs, and downloading videos with FFmpeg. Rebuilt from the original
+[`thedave42/f1tv-dl`](https://github.com/thedave42/f1tv-dl) Node.js tool, preserving
+its main command and flags. Requires Python 3.10+. The core package uses only the
+standard library; browser login is an optional extra.
 
-Note: a valid username/password is required. The app will save your session so the they will only be required again when your session has expried.
+## Install
 
-```
-f1tv-dl <url>
+Install [FFmpeg](https://ffmpeg.org/download.html), including `ffprobe`, on PATH.
+From this repository:
 
-Positionals:
-  url  The f1tv url for the video                                       [string]
-
-Options:
-      --help                 Show help                                 [boolean]
-      --version              Show version number                       [boolean]
-  -c, --channel              Choose an alternate channel for a content with
-                             multiple video feeds. Use the channel-list option
-                             to see a list of channels and specify
-                             name/number/tla to select alternate channel.
-                                                        [string] [default: null]
-  -i, --international-audio  Select a language to include from the INTERNATIONAL
-                             feed. This audio will be included in the file as a
-                             secondary audio track.
-              [string] [choices: "eng", "nld", "deu", "fra", "por", "spa", "fx"]
-  -t, --itsoffset            Used to sync secondary audio. Specify the time
-                             offset as '(-)hh:mm:ss.SSS'
-                                              [string] [default: "00:00:00.000"]
-  -a, --audio-stream         Specify audio stream language to download
-                                                       [string] [default: "eng"]
-  -s, --video-size           Specify video size to download as WxH or 'best' to
-                             select the highest resolution. (e.g. 640x360,
-                             1920x1080, best)         [string] [default: "best"]
-  -f, --format               Specify mp4 or TS output (default mp4)
-                                [string] [choices: "mp4", "ts"] [default: "mp4"]
-  -o, --output-directory     Specify a directory for the downloaded file
-                                                        [string] [default: null]
-  -U, --username             F1TV User name             [string] [default: null]
-  -P, --password             F1TV password              [string] [default: null]
-      --channel-list         Provides a list of channels available from url (for
-                             videos with multiple cameras)
-                                                      [boolean] [default: false]
-      --stream-url           Return the tokenized URL for use in another
-                             application and do not download the video
-                                                      [boolean] [default: false]
-  -l, --log-level            Set the log level
-          [choices: "trace", "debug", "info", "warn", "error"] [default: "info"]
-```
-## Use
-
-Use npm to install.
-
-([ffmpeg and ffprobe](https://www.ffmpeg.org/) are required and need to be present in the path)
-
-```
-npm i -g @thedave42/f1tv-dl
+```sh
+python -m venv .venv
+. .venv/bin/activate
+python -m pip install .
+f1tv-dl --help
 ```
 
-or use Docker (no need to install ffmpeg)
+On Windows, activate with `.venv\Scripts\Activate.ps1`. You can also run
+`python -m f1tv_dl` from the repository without installing the package.
 
+## List feeds
+
+Metadata and channel listing require neither login nor FFmpeg:
+
+```sh
+f1tv-dl 'https://f1tv.formula1.com/detail/1000010409/2026-united-states-grand-prix' --channel-list
 ```
-docker run -v <your local directory>:/download ghcr.io/thedave42/f1tv-dl-docker:latest -o /download <url> [options]
+
+Select a feed by case-insensitive title, driver name, racing number, three-letter
+code, or channel ID. Exact matches take priority; ambiguous partial names fail
+with the matching feed names. The advertised default feed, usually F1 LIVE, is
+selected when `--channel` is omitted.
+
+## Sign in
+
+Use your own F1 TV account with access to the requested content. Set `F1TV_USER`
+and `F1TV_PASSWORD` in the environment. The old `F1TV_PASS` alias also works.
+Missing credentials are requested interactively when a terminal is available;
+noninteractive runs fail with instructions instead of hanging. Passwords are never
+cached. `.env` files are not loaded automatically; export your variables or use a
+Docker `--env-file`.
+
+F1 TV may reject password API login with HTTP 403 or require browser verification.
+Use the optional browser integration for the normal sign-in flow:
+
+```sh
+python -m pip install '.[browser]'
+python -m playwright install chromium
+f1tv-dl URL --login-method browser
 ```
 
-Username and password can also be read from the environment variables `F1TV_USER` and `F1TV_PASS`.
+Complete sign-in in the browser window within two minutes. Available credentials
+are filled automatically; browser verification remains interactive. A display is
+required unless `--headless` is selected. Use `--browser-executable PATH` for an
+installed Chromium browser. The default Docker image contains the core client and
+FFmpeg, without a browser.
 
-## Download a video
+Alternatively, set `F1TV_TOKEN` to the `entitlement_token` cookie from your signed-in
+F1 TV session. This is the entitlement token, not the subscription token inside
+`login-session`. Treat it like a password. An explicitly supplied token is never
+saved to disk or silently replaced with another login.
 
-Log in to your f1tv account, navigate to the video you want to watch, and copy the url from your browser.
+Password login exchanges the subscription token for an entitlement token. Sessions
+are cached atomically at `$XDG_CACHE_HOME/f1tv-dl/session.json`, defaulting to
+`~/.cache/f1tv-dl/session.json`, or `%LOCALAPPDATA%\f1tv-dl\session.json` on Windows.
+The cache stores a bearer token in JSON, with owner-only file permissions on POSIX.
+Protect the directory with your account ACLs on Windows. Use `--session-file PATH`
+to choose a location or `--no-cache` to disable cache reads and writes. The old
+`.f1tv.json` cache is not imported; sign in once after migrating.
 
-`f1tv-dl <url>`
+## Download examples
 
-## See a list of different video feeds from a race with multiple feeds
+Replace `URL` below with the complete F1 TV detail URL:
 
-`f1tv-dl <url> --channel-list`
+```sh
+# Download the default feed.
+f1tv-dl URL -o ./download
 
-## Download the data channel stream from a race
+# Select a driver camera.
+f1tv-dl URL -c VER
 
-`f1tv-dl <url> -c data`
+# Download international Dutch commentary at an exact resolution.
+f1tv-dl URL -c INTERNATIONAL -a nld -s 1920x1080
 
-## Add Dutch audio from the international broadcast feed 
+# Add international commentary as a second audio track.
+f1tv-dl URL -i nld --itsoffset=-00:00:04.750
 
-`f1tv-dl <url> -i nld`
+# Download a short MPEG-TS sample.
+f1tv-dl URL --duration 10 -f ts
 
+# Print only the authorized playback URL to stdout.
+f1tv-dl URL --stream-url
+```
+
+Output filenames use the page slug and the selected channel, if specified.
+Existing files are preserved unless `--overwrite` is given. Downloads use a
+temporary file in the destination directory; the final file is published only
+after FFmpeg succeeds. Failed or cancelled temporary downloads are removed.
+Publishing without overwrite uses an atomic hard link, so the destination
+filesystem must support hard links, as typical NTFS, ext4, and APFS volumes do.
+
+FFprobe selects the highest resolution and frame rate for `--video-size best`,
+or an exact `WIDTHxHEIGHT` match. Audio is mapped by language and its absolute
+stream index within the selected HLS program. If a language is unavailable, a
+warning identifies the fallback to the default track. International audio adds
+one audio track without a second video. Audio offset defaults to zero; adjust it
+for the broadcast. MP4 and TS output copy the original codecs without re-encoding.
+
+Clear HLS and DASH and ordinary HLS AES-128 are supported. DRM-protected manifests
+are rejected. F1 TV enforces subscription, region, availability, browser
+verification, and CDN access. Signed URLs appear only for `--stream-url`; routine
+logs suppress them. HTTP 401 refreshes a cached login once; HTTP 403 reports an
+access problem without repeatedly submitting credentials.
+
+## Options
+
+Run `f1tv-dl --help` for all options. Original flags remain available: `-c`, `-i`,
+`-t`, `-a`, `-s`, `-f`, `-o`, `-U`, `-P`, `--channel-list`, `--stream-url`, and `-l`.
+
+| Option | Default / environment | Purpose |
+| --- | --- | --- |
+| `--token` | `F1TV_TOKEN` | Existing entitlement token |
+| `--login-method` | `password` | `password` or `browser` login |
+| `--session-file` | Platform cache | Session location |
+| `--no-cache` | Off | Disable session cache |
+| `--country` | `F1TV_COUNTRY` or `USA` | Metadata home country |
+| `--entitlement` | `F1TV_ENTITLEMENT` or `F1_TV_Pro_Annual` | Metadata entitlement |
+| `--timeout` | 30 seconds | Network read timeout |
+| `--duration` | Entire video | Output duration in seconds |
+| `--overwrite` | Off | Replace output after successful download |
+| `-o` | `F1TV_OUTDIR` or current directory | Output directory |
+
+Country and entitlement settings affect metadata; they do not grant access or
+change your account region. Standard proxy variables and system CA trust apply
+to API requests. Configure the corresponding trust stores for Chromium and FFmpeg
+when using an intercepting proxy. TLS verification stays enabled.
+
+Exit codes: `0` success, `1` operational error, `2` invalid arguments, `130` cancelled.
+
+## Docker
+
+```sh
+docker build -t f1tv-dl .
+mkdir -p download session-cache
+docker run --rm --user "$(id -u):$(id -g)" \
+  -e F1TV_USER -e F1TV_PASSWORD \
+  -v "$PWD/download:/download" -v "$PWD/session-cache:/cache" \
+  f1tv-dl 'https://f1tv.formula1.com/detail/1000010409/2026-united-states-grand-prix'
+```
+
+The Linux example uses your host UID/GID for writable bind mounts. On Windows,
+omit `--user` and use your shell's bind-mount syntax. For proxy builds, add
+`--secret id=proxy_ca,src=/path/to/ca-bundle.pem`. Runtime trust must be supplied
+separately; session certificates are never baked into image layers.
+
+## Development
+
+```sh
+python -m pip install -e '.[dev]'
+python -m unittest discover -s tests -v
+ruff check .
+ruff format --check .
+python -m build --outdir work/dist
+```
+
+Tests use public metadata fixtures and mocked authentication responses. Integration
+tests generate small local HLS/DASH streams, then use real FFprobe and FFmpeg to
+check resolution, language, container, secondary audio, and the full CLI flow.
+They require loopback networking and skip when FFmpeg is absent. No F1 TV
+credentials or external requests are needed in CI.

@@ -1,91 +1,47 @@
-# This workflow will do a clean install of node dependencies, build the source code and run tests across different versions of node
-# For more information see: https://help.github.com/actions/language-and-framework-guides/using-nodejs-with-github-actions
+name: Validate Python build
 
-name: Validate build
-
-on:  
-  push:    
-    paths-ignore:
-      - '.github/**'
-      - '**.md'
-    branches: [ main ]
+on:
+  push:
+    branches: [main]
   pull_request:
-    # The branches below must be a subset of the branches above
-    branches: [ main ]
-    paths-ignore:
-      - '.github/**'
-      - '**.md'
-  schedule:
-    - cron: '6 11 * * 3'
+    branches: [main]
+  workflow_dispatch:
 
-concurrency: 
-  group: build-group-${{ github.ref }}
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build-and-test:
-    if: github.actor != 'dependabot[bot]'
-    
-    runs-on: macos-latest
-    defaults:
-      run:
-        shell: bash
-
+  test:
     strategy:
       matrix:
-        node-version: ['14']
-
+        include:
+          - {os: ubuntu-latest, python: '3.10'}
+          - {os: ubuntu-latest, python: '3.12'}
+          - {os: ubuntu-latest, python: '3.14'}
+          - {os: windows-latest, python: '3.12'}
+          - {os: macos-latest, python: '3.12'}
+    runs-on: ${{ matrix.os }}
     steps:
-    - 
-      name: Workflow Actor
-      run: echo This workflow was triggered by $GITHUB_ACTOR
-    
-    -
-      name: Ping api endpoint
-      run: ping -c 4 account.formula1.com
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install FFmpeg for integration tests
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: python -m pip install -e '.[dev]'
+      - run: python -m unittest discover -s tests -v
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: python -m build
 
-    - 
-      name: Checkout code
-      uses: actions/checkout@v2
-
-    - 
-      name: Check access to login page
-      run: curl -o login.html -X GET https://account.formula1.com/#/en/login
-    
-    - 
-      name: Use Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v1
-      with:
-        node-version: ${{ matrix.node-version }}
-
-    -
-      name: Install app
-      run: npm i
-
-    -
-      name: Run unit tests
-      run: npm test
-      timeout-minutes: 3
-      env:
-        RACEURL: ${{ secrets.RACEURL }}
-        EPISODEURL: ${{ secrets.EPISODEURL }}
-        F1TV_USER: ${{ secrets.F1TV_USER }}
-        F1TV_PASS: ${{ secrets.F1TV_PASS }}
-        RACENAME: ${{ secrets.RACENAME }}
-        RACEID: ${{ secrets.RACEID }}
-        EPISODENAME: ${{ secrets.EPISODENAME }}
-        EPISODEID: ${{ secrets.EPISODEID }}
-        RACECHANNELID_DATA: ${{ secrets.RACECHANNELID_DATA }}
-        RACECHANNELID_HAM: ${{ secrets.RACECHANNELID_HAM }}
-
-    -
-       name: Upload artifacts on failure
-       uses: actions/upload-artifact@v2
-       if: failure()
-       with:
-         name: f1tv-build-artifacts
-         path: |
-          !node_modules/**
-          ./datastore-test.json
-          ./chromium_page*.png
-          ./login.html
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t f1tv-dl:test .
+      - run: docker run --rm f1tv-dl:test --version
