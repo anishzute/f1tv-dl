@@ -13,6 +13,7 @@ from .config import BASE_URL
 from .errors import AuthenticationError, F1TVError, OperationCancelled
 
 LOG = logging.getLogger(__name__)
+ACCOUNT_LOGIN_URL = "https://account.formula1.com/#/en/login?"
 ACCOUNT_HOSTS = {"f1tv.formula1.com", "account.formula1.com", "id.formula1.com"}
 CONSENT_HOSTS = ACCOUNT_HOSTS | {"consent.formula1.com"}
 ESSENTIAL_COOKIES = re.compile(
@@ -204,7 +205,7 @@ class BrowserFlow:
     def advance(self, page):
         for frame in page.frames:
             if self.accept_essential_cookies(frame):
-                self.emit("Cookie choices saved. Opening the F1 account sign-in page…")
+                self.emit("Cookie choices saved. Waiting for F1 account sign-in…")
                 return
         if urlsplit(page.url).hostname == "f1tv.formula1.com" and id(page) not in self.opened_login:
             button = first_visible(page.get_by_role("link", name=SIGN_IN))
@@ -298,8 +299,10 @@ def browser_login(
                 flow = BrowserFlow(
                     context, exchange, username, password, cancel=cancel, status=status
                 )
-                flow.emit("Opening the official F1 TV sign-in browser…")
-                context.new_page().goto(BASE_URL, wait_until="domcontentloaded", timeout=30000)
+                flow.emit("Opening the official F1 account sign-in page…")
+                context.new_page().goto(
+                    ACCOUNT_LOGIN_URL, wait_until="domcontentloaded", timeout=30000
+                )
                 return flow.wait(timeout, Error)
             finally:
                 if browser is not None:

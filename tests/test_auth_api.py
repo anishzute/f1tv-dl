@@ -138,6 +138,9 @@ class BrowserAuthTests(unittest.TestCase):
         ]
         token = Authenticator(Mock()).browser_login(headless=True, executable="chromium")
         self.assertEqual(token, "browser-token")
+        self.assertEqual(
+            self.page.goto.call_args.args[0], "https://account.formula1.com/#/en/login?"
+        )
         self.browser.close.assert_called_once()
         options = self.driver.chromium.launch.call_args.kwargs
         self.assertTrue(options["headless"])

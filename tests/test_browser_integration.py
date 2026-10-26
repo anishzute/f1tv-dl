@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import Mock
 from urllib.parse import quote, urlsplit
 
-from f1tv_dl.browser import BrowserFlow
+from f1tv_dl.browser import ACCOUNT_LOGIN_URL, BrowserFlow
 from f1tv_dl.errors import APIError, AuthenticationError
 
 AVAILABLE = importlib.util.find_spec("playwright") is not None
@@ -42,6 +42,7 @@ class BrowserFlowIntegrationTests(unittest.TestCase):
         self.submissions = []
         self.choices = []
         self.popup = False
+        self.home_requests = 0
         self.context.route("**/*", self.respond)
 
     def respond(self, route):
@@ -54,6 +55,7 @@ class BrowserFlowIntegrationTests(unittest.TestCase):
                 "Essential only cookies</button>"
             )
         elif request.url == HOME:
+            self.home_requests += 1
             target = 'target="_blank"' if self.popup else ""
             html = (
                 f'<a href="{ACCOUNT}" {target}>Sign in</a>'
@@ -62,7 +64,7 @@ class BrowserFlowIntegrationTests(unittest.TestCase):
                 '<script>onmessage=e=>{if(e.data==="essential")'
                 'document.querySelector("iframe").remove()}</script>'
             )
-        elif request.url == ACCOUNT:
+        elif request.url in (ACCOUNT, "https://account.formula1.com/"):
             html = (
                 '<iframe src="https://consent.formula1.com/second" '
                 'style="position:fixed;inset:0;width:100%;height:100%;z-index:10"></iframe>'
@@ -110,9 +112,9 @@ class BrowserFlowIntegrationTests(unittest.TestCase):
             return
         route.fulfill(status=200, body=html, content_type="text/html")
 
-    def login(self):
+    def login(self, start=HOME):
         page = self.context.new_page()
-        page.goto(HOME)
+        page.goto(start)
         stages = []
         exchange = Mock()
         flow = BrowserFlow(
@@ -121,13 +123,18 @@ class BrowserFlowIntegrationTests(unittest.TestCase):
         token = flow.wait(8, self.browser_error)
         self.assertEqual(token, "fixture-entitlement")
         self.assertEqual(len(self.submissions), 1)
-        self.assertIn("/first", self.choices)
         self.assertIn("/second", self.choices)
         self.assertNotIn("fixture-password", " ".join(stages))
         exchange.assert_not_called()
 
     def test_two_consent_frames_and_modern_identity_provider_complete_sign_in(self):
         self.login()
+        self.assertIn("/first", self.choices)
+
+    def test_direct_account_sign_in_completes_without_loading_the_homepage(self):
+        self.login(ACCOUNT_LOGIN_URL)
+        self.assertEqual(self.home_requests, 0)
+        self.assertNotIn("/first", self.choices)
 
     def test_sign_in_can_complete_in_a_popup(self):
         self.popup = True

@@ -36,8 +36,9 @@ A desktop display and FFmpeg are required; the CLI Docker image stays headless.
 
 1. On **Account**, select **Browser sign-in**, **Email and password**, or **Session token**.
    For browser sign-in, click **Install browser support** once, then **Sign in**.
-   Complete any account verification in the official F1 TV browser window.
-   The app handles essential-only cookie choices on both sign-in pages and follows
+   The browser opens the [official F1 account login](https://account.formula1.com/#/en/login?)
+   directly. Complete any account verification in that window.
+   The app handles essential-only cookie choices and follows
    F1's identity-provider redirect. The status bar shows each sign-in stage.
 2. On **Download**, paste your video URL and click **Load video**. Choose a feed
    from the table. Channel listing also works before signing in.
@@ -97,8 +98,9 @@ python -m playwright install chromium
 f1tv-dl URL --login-method browser
 ```
 
-Complete sign-in in the browser window within three minutes. Available credentials
-are filled automatically; browser verification remains interactive. A display is
+Browser sign-in opens the F1 account login directly, without waiting for the F1 TV
+homepage to load. Complete sign-in in the browser window within three minutes.
+Available credentials are filled automatically; browser verification remains interactive. A display is
 required unless `--headless` is selected. Use `--browser-executable PATH` for an
 installed Chromium browser. The default Docker image contains the core client and
 FFmpeg, without a browser.
