@@ -20,6 +20,11 @@ class MediaError(F1TVError):
     pass
 
 
+class OperationCancelled(F1TVError):
+    def __init__(self):
+        super().__init__("Cancelled.")
+
+
 class DRMError(MediaError):
     def __init__(self):
         super().__init__(

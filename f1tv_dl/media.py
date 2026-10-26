@@ -3,11 +3,13 @@
 import json
 import logging
 import os
+import queue
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from fractions import Fraction
@@ -15,7 +17,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .config import USER_AGENT
-from .errors import DRMError, MediaError
+from .errors import DRMError, MediaError, OperationCancelled
 from .http import validate_media_url
 
 LOG = logging.getLogger(__name__)
@@ -112,6 +114,7 @@ def probe(url: str, *, timeout: float = 30.0) -> dict:
             timeout=timeout + 15,
             check=False,
             env=media_environment(),
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except subprocess.TimeoutExpired:
         raise MediaError("FFprobe timed out while reading the stream.") from None
@@ -155,6 +158,13 @@ class Selection:
     language: str
     width: int = 0
     height: int = 0
+
+
+@dataclass(frozen=True)
+class DownloadProgress:
+    seconds: float = 0
+    total_bytes: int = 0
+    speed: str = ""
 
 
 def select_streams(
@@ -289,7 +299,21 @@ def build_command(
     return command + ["-y", str(output)]
 
 
-def download(url, selection, output: Path, *, overwrite=False, **options):
+def stop_process(process):
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+
+def download(
+    url, selection, output: Path, *, overwrite=False, progress=None, cancel=None, **options
+):
+    if cancel is not None and cancel.is_set():
+        raise OperationCancelled()
     binary = require_binary("ffmpeg")
     output = output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -303,24 +327,64 @@ def download(url, selection, output: Path, *, overwrite=False, **options):
     os.close(fd)
     temporary = Path(temporary_name)
     process = None
+    reader = None
     try:
         command = build_command(binary, url, selection, temporary, **options)
         # Keep diagnostics out of the console: they can contain signed URLs and account tokens.
         with tempfile.TemporaryFile() as errors:
             process = subprocess.Popen(
-                command, stdout=subprocess.PIPE, stderr=errors, text=True, env=media_environment()
+                command,
+                stdout=subprocess.PIPE,
+                stderr=errors,
+                text=True,
+                env=media_environment(),
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
+            lines = queue.Queue()
+
+            def read_progress():
+                try:
+                    for line in process.stdout:
+                        lines.put(line)
+                finally:
+                    lines.put(None)
+
+            reader = threading.Thread(target=read_progress, name="ffmpeg-progress", daemon=True)
+            reader.start()
+            values = {}
             try:
-                for line in process.stdout:
-                    if line.startswith("out_time=") and sys.stderr.isatty():
+                while True:
+                    if cancel is not None and cancel.is_set():
+                        raise OperationCancelled()
+                    try:
+                        line = lines.get(timeout=0.1)
+                    except queue.Empty:
+                        continue
+                    if line is None:
+                        break
+                    key, _, value = line.strip().partition("=")
+                    values[key] = value
+                    if key == "progress" and progress is not None:
+                        progress(
+                            DownloadProgress(
+                                seconds=max(0, numeric(values.get("out_time_us"))) / 1_000_000,
+                                total_bytes=max(0, numeric(values.get("total_size"))),
+                                speed=values.get("speed", "").strip(),
+                            )
+                        )
+                    if line.startswith("out_time=") and sys.stderr and sys.stderr.isatty():
                         print(
                             "\rDownloaded " + line.strip().split("=", 1)[1], end="", file=sys.stderr
                         )
                 status = process.wait()
             finally:
+                stop_process(process)
+                reader.join(timeout=5)
                 process.stdout.close()
-                if sys.stderr.isatty():
+                if sys.stderr and sys.stderr.isatty():
                     print(file=sys.stderr)
+        if cancel is not None and cancel.is_set():
+            raise OperationCancelled()
         if status:
             raise MediaError(
                 f"FFmpeg failed (exit code {status}). Check stream access and codec support."
@@ -338,11 +402,8 @@ def download(url, selection, output: Path, *, overwrite=False, **options):
                     "Output file was created by another process; it was preserved."
                 ) from None
     finally:
-        if process is not None and process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
+        if process is not None:
+            stop_process(process)
+        if reader is not None:
+            reader.join(timeout=5)
         temporary.unlink(missing_ok=True)

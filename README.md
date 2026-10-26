@@ -1,6 +1,6 @@
 # f1tv-dl
 
-A Python command-line client for listing F1 TV feeds, resolving authorized playback
+A Python desktop and command-line client for listing F1 TV feeds, resolving authorized playback
 URLs, and downloading videos with FFmpeg. Rebuilt from the original
 [`thedave42/f1tv-dl`](https://github.com/thedave42/f1tv-dl) Node.js tool, preserving
 its main command and flags. Requires Python 3.10+. The core package uses only the
@@ -20,6 +20,46 @@ f1tv-dl --help
 
 On Windows, activate with `.venv\Scripts\Activate.ps1`. You can also run
 `python -m f1tv_dl` from the repository without installing the package.
+
+## Desktop app
+
+Open the graphical interface after installing the package:
+
+```sh
+f1tv-dl-gui
+```
+
+You can also run `python -m f1tv_dl.gui` directly from this repository.
+The desktop app uses Tk, included with the standard Windows/macOS Python installer.
+On Debian/Ubuntu, install `python3-tk` for the Python version running the app.
+A desktop display and FFmpeg are required; the CLI Docker image stays headless.
+
+1. On **Account**, select **Browser sign-in**, **Email and password**, or **Session token**.
+   For browser sign-in, click **Install browser support** once, then **Sign in**.
+   Complete any account verification in the official F1 TV browser window.
+2. On **Download**, paste your video URL and click **Load video**. Choose a feed
+   from the table. Channel listing also works before signing in.
+3. Select quality and audio. **Check streams** discovers the actual resolutions
+   and languages for the chosen feed. Extra international audio is optional.
+4. Click **Choose folder**, select MP4 or TS, and click **Download video**.
+   The app shows progress, output size, and download speed. **Cancel** stops the
+   operation and removes an incomplete video; **Open folder** shows a finished file.
+
+**Settings** provides audio offset, sample duration, network timeout, metadata
+country/entitlement, cache location, and an optional installed Chromium path.
+**Copy playback link** copies the authorized URL without including it in the log.
+The status and Cancel button remain visible while the tabs scroll in smaller windows.
+
+Sign-in and downloads run in background workers so the window stays responsive.
+**Remember sign-in** stores only the session token using the same protected cache
+as the CLI. Uncheck it to keep a password/browser session in memory only and clear
+any previously saved session. Pasted session tokens are never saved. **Sign out**
+removes the saved session. Passwords and pasted tokens are cleared from their
+input fields after a successful sign-in. Expired sessions prompt you to sign in
+again; the desktop app does not retain a password for automatic retries.
+
+F1 TV's subscription, regional, browser verification, and DRM requirements apply
+to the desktop app just as they do to the CLI.
 
 ## List feeds
 
@@ -171,3 +211,9 @@ tests generate small local HLS/DASH streams, then use real FFprobe and FFmpeg to
 check resolution, language, container, secondary audio, and the full CLI flow.
 They require loopback networking and skip when FFmpeg is absent. No F1 TV
 credentials or external requests are needed in CI.
+
+Desktop interaction tests run when Tk and a display are available. On headless
+Linux, use `xvfb-run -a python -m unittest discover -s tests -v`. They exercise
+graphical sign-in, feed selection, audio settings, download completion, cancellation,
+folder selection, error recovery, and sign-out. Media integration tests also check
+the desktop service against real locally generated streams and FFmpeg progress.

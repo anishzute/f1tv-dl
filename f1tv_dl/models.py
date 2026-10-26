@@ -84,6 +84,7 @@ class Content:
     ref: ContentRef
     title: str
     channels: tuple[Channel, ...]
+    duration: float = 0
 
     @classmethod
     def from_response(cls, ref, payload):
@@ -95,7 +96,9 @@ class Content:
             metadata = data["metadata"]
             streams = metadata.get("additionalStreams") or []
             channels = tuple(Channel.from_dict(item) for item in streams)
-            return cls(ref, str(metadata.get("title") or ref.name), channels)
+            duration = metadata.get("duration")
+            duration = max(0, duration) if isinstance(duration, (int, float)) else 0
+            return cls(ref, str(metadata.get("title") or ref.name), channels, duration)
         except (KeyError, TypeError, ValueError, StopIteration, AttributeError):
             raise F1TVError(
                 "Content metadata was missing or did not match the requested video."

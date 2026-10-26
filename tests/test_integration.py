@@ -16,8 +16,10 @@ from unittest.mock import patch
 from test_models import FIXTURE, URL
 
 from f1tv_dl.cli import main
+from f1tv_dl.desktop import DesktopService, DownloadOptions
 from f1tv_dl.http import HttpClient
 from f1tv_dl.media import check_manifest, download, probe, select_streams
+from f1tv_dl.models import Content, ContentRef
 
 
 class QuietHandler(SimpleHTTPRequestHandler):
@@ -275,3 +277,31 @@ class FFmpegIntegrationTests(unittest.TestCase):
         streams = self.inspect_output(output)
         self.assertEqual([s["codec_type"] for s in streams], ["video", "audio", "audio"])
         self.assertFalse(list(output.parent.glob("*.part*")))
+
+    def test_desktop_download_has_real_progress_and_two_audio_tracks(self):
+        real_http = HttpClient()
+        service = DesktopService(session_path=self.root / "desktop-session.json")
+        service.sign_in("token", token="fixture-token")
+        url = self.base_url + "/dash/master.mpd"
+        service.stream_url = lambda *args: url
+        service.http = real_http
+        content = Content.from_response(ContentRef.parse(URL), FIXTURE)
+        progress = []
+        # Windows GUI launchers run without a console or stderr stream.
+        with patch("f1tv_dl.media.sys.stderr", None):
+            output = service.download(
+                content,
+                DownloadOptions(
+                    self.root / "desktop-output",
+                    channel="VER",
+                    resolution="160x90",
+                    international="nld",
+                    duration=1,
+                ),
+                progress=progress.append,
+            )
+        streams = self.inspect_output(output)
+        self.assertEqual([s["codec_type"] for s in streams], ["video", "audio", "audio"])
+        self.assertTrue(progress)
+        self.assertGreater(progress[-1].seconds, 0)
+        self.assertGreater(progress[-1].total_bytes, 0)

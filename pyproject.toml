@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "f1tv-dl"
-version = "1.0.0"
-description = "An F1 TV command-line client for local playback and downloads"
+version = "1.1.0"
+description = "An F1 TV desktop and command-line client for local playback and downloads"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "ISC"
@@ -19,6 +19,9 @@ dev = ["ruff>=0.9,<1", "build>=1.2,<2"]
 
 [project.scripts]
 f1tv-dl = "f1tv_dl.cli:main"
+
+[project.gui-scripts]
+f1tv-dl-gui = "f1tv_dl.gui:main"
 
 [tool.setuptools.packages.find]
 include = ["f1tv_dl*"]

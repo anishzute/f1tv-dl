@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from .config import API_KEY, BASE_URL, DISTRIBUTION_CHANNEL, LOGIN_URL
-from .errors import APIError, AuthenticationError, F1TVError
+from .errors import APIError, AuthenticationError, F1TVError, OperationCancelled
 
 LOG = logging.getLogger(__name__)
 
@@ -63,6 +63,10 @@ class SessionStore:
             if temporary is not None:
                 Path(temporary).unlink(missing_ok=True)
 
+    def clear(self):
+        if self.path is not None:
+            self.path.unlink(missing_ok=True)
+
 
 class Authenticator:
     def __init__(self, http):
@@ -107,7 +111,9 @@ class Authenticator:
             )
         return self.exchange_subscription_token(subscription)
 
-    def browser_login(self, username=None, password=None, *, headless=False, executable=None):
+    def browser_login(
+        self, username=None, password=None, *, headless=False, executable=None, cancel=None
+    ):
         """Use the normal sign-in flow; never suppress TLS checks or browser challenges."""
         try:
             from playwright.sync_api import Error, sync_playwright
@@ -136,6 +142,8 @@ class Authenticator:
                 deadline = time.monotonic() + 120
                 filled_user = filled_password = submitted = advanced_user = False
                 while time.monotonic() < deadline:
+                    if cancel is not None and cancel.is_set():
+                        raise OperationCancelled()
                     for cookie in context.cookies(BASE_URL):
                         if cookie["name"] == "entitlement_token":
                             token = unquote(cookie["value"])

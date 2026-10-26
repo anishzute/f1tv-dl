@@ -1,11 +1,14 @@
 import io
 import json
+import subprocess
+import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from f1tv_dl.errors import DRMError, MediaError
+from f1tv_dl.errors import DRMError, MediaError, OperationCancelled
 from f1tv_dl.media import Selection, build_command, check_manifest, download, probe, select_streams
 
 
@@ -90,6 +93,44 @@ class ManifestTests(unittest.TestCase):
 
 
 class FFmpegTests(unittest.TestCase):
+    def test_cancel_stops_a_silent_process_and_removes_the_partial_file(self):
+        cancel = threading.Event()
+        processes = []
+        original_popen = subprocess.Popen
+
+        def launch(*args, **kwargs):
+            process = original_popen(*args, **kwargs)
+            processes.append(process)
+            return process
+
+        timer = threading.Timer(0.25, cancel.set)
+        with tempfile.TemporaryDirectory() as directory:
+            timer.start()
+            try:
+                with (
+                    patch("f1tv_dl.media.require_binary", return_value=sys.executable),
+                    patch(
+                        "f1tv_dl.media.build_command",
+                        return_value=[
+                            sys.executable,
+                            "-c",
+                            "import time; time.sleep(60)",
+                        ],
+                    ),
+                    patch("f1tv_dl.media.subprocess.Popen", side_effect=launch),
+                ):
+                    with self.assertRaises(OperationCancelled):
+                        download(
+                            "https://cdn.test/a.mpd",
+                            Selection(0, 1, "eng"),
+                            Path(directory) / "video.mp4",
+                            cancel=cancel,
+                        )
+                self.assertEqual(list(Path(directory).iterdir()), [])
+                self.assertIsNotNone(processes[0].poll())
+            finally:
+                timer.cancel()
+
     def test_secondary_audio_adds_one_audio_stream_and_no_extra_video(self):
         command = build_command(
             "ffmpeg",
