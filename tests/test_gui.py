@@ -1,5 +1,6 @@
 """Desktop interaction tests; run under xvfb-run on a headless Linux machine."""
 
+import gc
 import os
 import tempfile
 import threading
@@ -42,8 +43,17 @@ class DesktopInteractionTests(unittest.TestCase):
         self.errors = patch("f1tv_dl.gui.messagebox.showerror")
         self.showerror = self.errors.start()
         self.addCleanup(self.errors.stop)
-        self.addCleanup(self.app._destroy)
+        self.addCleanup(self.cleanup_app)
         self.root.update()
+
+    def cleanup_app(self):
+        self.app._destroy()
+        self.app.executor.shutdown(wait=True, cancel_futures=True)
+        self.showerror.reset_mock()
+        self.app = self.root = self.service = None
+        # Mock callbacks create cycles. Finalize Tk variables here, on the Tk thread,
+        # before later HTTP/FFmpeg worker threads can trigger garbage collection.
+        gc.collect()
 
     def wait_idle(self):
         deadline = time.monotonic() + 4
@@ -128,6 +138,20 @@ class DesktopInteractionTests(unittest.TestCase):
         self.assertFalse(self.service.signed_in)
         self.assertTrue(self.app.download_button.instate(["disabled"]))
         self.showerror.assert_called_once()
+
+    def test_environment_password_is_used_only_for_the_matching_account(self):
+        with patch.dict(
+            os.environ, {"F1TV_USER": "env@example.test", "F1TV_PASSWORD": "env-secret"}
+        ):
+            self.app.method.set("Email and password")
+            self.app._account_fields()
+            self.app.email.set("env@example.test")
+            self.app.password.set("")
+            self.app.signin_button.invoke()
+            self.wait_idle()
+        self.service.auth.password_login.assert_called_once_with("env@example.test", "env-secret")
+        self.assertEqual(self.app.password.get(), "")
+        self.assertNotIn("env-secret", self.app.log.get("1.0", "end"))
 
     def test_quality_inspection_updates_dropdowns(self):
         self.login()

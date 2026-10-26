@@ -647,6 +647,12 @@ class DownloaderApp:
     def sign_in(self):
         method = METHODS[self.method.get()]
         username, password, token = self.email.get(), self.password.get(), self.token.get()
+        if (
+            not password
+            and username.strip()
+            and username.strip() == os.environ.get("F1TV_USER", "").strip()
+        ):
+            password = os.environ.get("F1TV_PASSWORD") or os.environ.get("F1TV_PASS", "")
         remember, executable = self.remember.get(), self.browser_path.get().strip()
         self._run(
             "Signing in…",
@@ -658,6 +664,7 @@ class DownloaderApp:
                 remember=remember,
                 executable=executable,
                 cancel=cancel,
+                status=lambda text: self.events.put(("status", text)),
             ),
             self._signed_in,
         )

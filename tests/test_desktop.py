@@ -78,6 +78,7 @@ class DesktopServiceTests(unittest.TestCase):
             None,
             executable="chromium",
             cancel=cancel,
+            status=None,
         )
 
     def test_cancelled_sign_in_does_not_change_session_or_submit_password(self):

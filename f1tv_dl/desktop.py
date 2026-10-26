@@ -83,6 +83,7 @@ class DesktopService:
         remember=True,
         executable=None,
         cancel=None,
+        status=None,
     ):
         check_cancel(cancel)
         if method == "browser":
@@ -91,6 +92,7 @@ class DesktopService:
                 password or None,
                 executable=executable or None,
                 cancel=cancel,
+                status=status,
             )
         elif method == "password":
             session_token = self.auth.password_login(username.strip(), password)

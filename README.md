@@ -37,6 +37,8 @@ A desktop display and FFmpeg are required; the CLI Docker image stays headless.
 1. On **Account**, select **Browser sign-in**, **Email and password**, or **Session token**.
    For browser sign-in, click **Install browser support** once, then **Sign in**.
    Complete any account verification in the official F1 TV browser window.
+   The app handles essential-only cookie choices on both sign-in pages and follows
+   F1's identity-provider redirect. The status bar shows each sign-in stage.
 2. On **Download**, paste your video URL and click **Load video**. Choose a feed
    from the table. Channel listing also works before signing in.
 3. Select quality and audio. **Check streams** discovers the actual resolutions
@@ -57,6 +59,9 @@ any previously saved session. Pasted session tokens are never saved. **Sign out*
 removes the saved session. Passwords and pasted tokens are cleared from their
 input fields after a successful sign-in. Expired sessions prompt you to sign in
 again; the desktop app does not retain a password for automatic retries.
+If `F1TV_USER` and `F1TV_PASSWORD` (or `F1TV_PASS`) are set, the desktop app can
+use that password when its password field is blank and the email matches
+`F1TV_USER`. An entered password takes priority.
 
 F1 TV's subscription, regional, browser verification, and DRM requirements apply
 to the desktop app just as they do to the CLI.
@@ -92,7 +97,7 @@ python -m playwright install chromium
 f1tv-dl URL --login-method browser
 ```
 
-Complete sign-in in the browser window within two minutes. Available credentials
+Complete sign-in in the browser window within three minutes. Available credentials
 are filled automatically; browser verification remains interactive. A display is
 required unless `--headless` is selected. Use `--browser-executable PATH` for an
 installed Chromium browser. The default Docker image contains the core client and
@@ -217,3 +222,7 @@ Linux, use `xvfb-run -a python -m unittest discover -s tests -v`. They exercise
 graphical sign-in, feed selection, audio settings, download completion, cancellation,
 folder selection, error recovery, and sign-out. Media integration tests also check
 the desktop service against real locally generated streams and FFmpeg progress.
+Browser-flow tests use real Chromium with intercepted fixture pages and no live
+account credentials. Install the `browser` extra and run `playwright install chromium`
+to enable them. They cover consecutive consent frames, F1's identity provider,
+popups, safe credential entry, and session-cookie completion after redirects.

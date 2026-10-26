@@ -4,15 +4,12 @@ import base64
 import json
 import logging
 import os
-import re
 import tempfile
 import time
-from contextlib import suppress
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
 
 from .config import API_KEY, BASE_URL, DISTRIBUTION_CHANNEL, LOGIN_URL
-from .errors import APIError, AuthenticationError, F1TVError, OperationCancelled
+from .errors import APIError, AuthenticationError, F1TVError
 
 LOG = logging.getLogger(__name__)
 
@@ -112,111 +109,28 @@ class Authenticator:
         return self.exchange_subscription_token(subscription)
 
     def browser_login(
-        self, username=None, password=None, *, headless=False, executable=None, cancel=None
+        self,
+        username=None,
+        password=None,
+        *,
+        headless=False,
+        executable=None,
+        cancel=None,
+        status=None,
+        timeout=180,
     ):
-        """Use the normal sign-in flow; never suppress TLS checks or browser challenges."""
-        try:
-            from playwright.sync_api import Error, sync_playwright
-        except ImportError:
-            raise AuthenticationError(
-                'Browser login requires: pip install "f1tv-dl[browser]"; '
-                "then run: playwright install chromium"
-            ) from None
+        from .browser import browser_login
 
-        with sync_playwright() as playwright:
-            browser = None
-            try:
-                options = {"headless": headless}
-                if executable:
-                    options["executable_path"] = executable
-                proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
-                if proxy:
-                    options["proxy"] = {"server": proxy}
-                browser = playwright.chromium.launch(**options)
-                context = browser.new_context()
-                page = context.new_page()
-                LOG.info("Complete sign-in in the browser. Waiting up to 120 seconds.")
-                page.goto(BASE_URL, wait_until="domcontentloaded", timeout=30000)
-                # Cookie consent is optional and varies by region. Leave it for the user
-                # in an interactive browser; a headless run uses only visible known controls.
-                deadline = time.monotonic() + 120
-                filled_user = filled_password = submitted = advanced_user = False
-                while time.monotonic() < deadline:
-                    if cancel is not None and cancel.is_set():
-                        raise OperationCancelled()
-                    for cookie in context.cookies(BASE_URL):
-                        if cookie["name"] == "entitlement_token":
-                            token = unquote(cookie["value"])
-                            if token_is_fresh(token):
-                                return token
-                        if cookie["name"] == "login-session":
-                            try:
-                                session = json.loads(unquote(cookie["value"]))
-                                subscription = session["data"]["subscriptionToken"]
-                            except (ValueError, KeyError, TypeError):
-                                continue
-                            if isinstance(subscription, str) and token_is_fresh(subscription):
-                                return self.exchange_subscription_token(subscription)
-                    consent = page.locator("#truste-consent-button")
-                    if consent.count() and consent.first.is_visible():
-                        consent.first.click(timeout=2000)
-                    login = page.get_by_role("link", name="Sign in", exact=False)
-                    if not filled_user and login.count() and login.first.is_visible():
-                        login.first.click(timeout=5000)
-                    # Only fill credentials on the official account pages. Users can
-                    # complete any external identity-provider interaction themselves.
-                    if urlsplit(page.url).hostname not in {
-                        "f1tv.formula1.com",
-                        "account.formula1.com",
-                    }:
-                        page.wait_for_timeout(500)
-                        continue
-                    user = page.locator(
-                        'input[name="Login"]:visible, input[name="username"]:visible, '
-                        'input[name="email"]:visible, input[type="email"]:visible'
-                    )
-                    secret = page.locator('input[type="password"]:visible')
-                    if username and not filled_user and user.count() and user.first.is_visible():
-                        user.first.fill(username)
-                        filled_user = True
-                    if filled_user and not secret.count() and not advanced_user:
-                        next_button = page.get_by_role(
-                            "button", name=re.compile(r"^(continue|next)$", re.I)
-                        )
-                        if next_button.count() and next_button.first.is_visible():
-                            next_button.first.click(timeout=10000)
-                            advanced_user = True
-                    if (
-                        password
-                        and not filled_password
-                        and secret.count()
-                        and secret.first.is_visible()
-                    ):
-                        secret.first.fill(password)
-                        filled_password = True
-                    if filled_user and filled_password and not submitted:
-                        button = page.locator('button[type="submit"]:visible')
-                        if (
-                            button.count()
-                            and button.first.is_visible()
-                            and button.first.is_enabled()
-                        ):
-                            button.first.click(timeout=10000)
-                            submitted = True
-                    page.wait_for_timeout(500)
-                raise AuthenticationError(
-                    "Browser sign-in timed out before an entitlement token was issued. "
-                    "Complete sign-in in the official player and supply F1TV_TOKEN."
-                )
-            except Error:
-                raise AuthenticationError(
-                    "Browser login failed. Install Chromium with 'playwright install chromium', "
-                    "check display/proxy/CA trust, or supply F1TV_TOKEN."
-                ) from None
-            finally:
-                if browser is not None:
-                    with suppress(Error):
-                        browser.close()
+        return browser_login(
+            self.exchange_subscription_token,
+            username,
+            password,
+            headless=headless,
+            executable=executable,
+            cancel=cancel,
+            status=status,
+            timeout=timeout,
+        )
 
 
 class SessionManager:
