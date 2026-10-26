@@ -119,6 +119,7 @@ class BrowserAuthTests(unittest.TestCase):
         self.error = type("BrowserError", (Exception,), {})
         self.browser = Mock()
         self.context = self.browser.new_context.return_value
+        self.context.pages = []
         self.page = self.context.new_page.return_value
         self.driver = Mock()
         self.driver.chromium.launch.return_value = self.browser
@@ -126,6 +127,8 @@ class BrowserAuthTests(unittest.TestCase):
         manager.__enter__.return_value = self.driver
         api = ModuleType("playwright.sync_api")
         api.Error = self.error
+        self.timeout_error = type("BrowserTimeout", (self.error,), {})
+        api.TimeoutError = self.timeout_error
         api.sync_playwright = Mock(return_value=manager)
         modules = {"playwright": ModuleType("playwright"), "playwright.sync_api": api}
         self.module_patch = patch.dict("sys.modules", modules)
@@ -167,6 +170,14 @@ class BrowserAuthTests(unittest.TestCase):
             Authenticator(Mock()).browser_login()
         self.assertNotIn("private-cookie", str(caught.exception))
         self.browser.close.assert_called_once()
+
+    def test_initial_navigation_timeout_retries_the_account_address_once(self):
+        self.page.goto.side_effect = [self.timeout_error("private-url"), None]
+        self.context.cookies.return_value = [{"name": "entitlement_token", "value": "session"}]
+        self.assertEqual(Authenticator(Mock()).browser_login(), "session")
+        self.assertEqual(self.page.goto.call_count, 2)
+        self.assertEqual(self.page.goto.call_args_list[0], self.page.goto.call_args_list[1])
+        self.assertEqual(self.page.goto.call_args.kwargs["wait_until"], "commit")
 
 
 class APITests(unittest.TestCase):

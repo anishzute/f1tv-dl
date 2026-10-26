@@ -40,6 +40,8 @@ A desktop display and FFmpeg are required; the CLI Docker image stays headless.
    directly. Complete any account verification in that window.
    The app handles essential-only cookie choices and follows
    F1's identity-provider redirect. The status bar shows each sign-in stage.
+   A stalled account loading screen is refreshed once automatically. The browser
+   closes when sign-in completes, even if the website still shows the F1 logo.
 2. On **Download**, paste your video URL and click **Load video**. Choose a feed
    from the table. Channel listing also works before signing in.
 3. Select quality and audio. **Check streams** discovers the actual resolutions
@@ -100,7 +102,10 @@ f1tv-dl URL --login-method browser
 
 Browser sign-in opens the F1 account login directly, without waiting for the F1 TV
 homepage to load. Complete sign-in in the browser window within three minutes.
-Available credentials are filled automatically; browser verification remains interactive. A display is
+Available credentials are filled automatically; browser verification remains interactive.
+The app detects sessions from F1's completed token exchange, account cookies, and
+account storage. It refreshes a stalled account loading screen once after 15 seconds;
+password and verification screens are preserved. A display is
 required unless `--headless` is selected. Use `--browser-executable PATH` for an
 installed Chromium browser. The default Docker image contains the core client and
 FFmpeg, without a browser.
