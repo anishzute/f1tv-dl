@@ -19,7 +19,7 @@ from test_models import FIXTURE, URL
 from f1tv_dl.auth import SessionCredentials, SessionManager, SessionStore
 from f1tv_dl.cli import main
 from f1tv_dl.desktop import DesktopService, DownloadOptions
-from f1tv_dl.errors import APIError
+from f1tv_dl.errors import APIError, MediaError
 from f1tv_dl.http import HttpClient
 from f1tv_dl.media import check_manifest, download, probe, select_streams
 from f1tv_dl.models import Content, ContentRef
@@ -137,6 +137,41 @@ class FFmpegIntegrationTests(unittest.TestCase):
                 str(cls.root / "hls/stream_%v.m3u8"),
             ]
         )
+        (cls.root / "cmaf").mkdir()
+        cls.run_ffmpeg(
+            [
+                "-i",
+                str(cls.root / "source.mp4"),
+                "-map",
+                "0:v:0",
+                "-map",
+                "0:v:1",
+                "-map",
+                "0:a:0",
+                "-map",
+                "0:a:1",
+                "-c",
+                "copy",
+                "-f",
+                "hls",
+                "-hls_segment_type",
+                "fmp4",
+                "-hls_time",
+                "1",
+                "-hls_playlist_type",
+                "vod",
+                "-var_stream_map",
+                "a:0,agroup:audio,language:eng,default:yes "
+                "a:1,agroup:audio,language:nld v:0,agroup:audio v:1,agroup:audio",
+                "-hls_fmp4_init_filename",
+                "init_%v.mp4",
+                "-hls_segment_filename",
+                str(cls.root / "cmaf/segment_%v_%03d.mp4"),
+                "-master_pl_name",
+                "master.m3u8",
+                str(cls.root / "cmaf/stream_%v.m3u8"),
+            ]
+        )
         handler = functools.partial(QuietHandler, directory=str(cls.root))
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         cls.addClassCleanup(cls.server.server_close)
@@ -193,6 +228,57 @@ class FFmpegIntegrationTests(unittest.TestCase):
         self.assertEqual((video["width"], video["height"]), (320, 180))
         self.assertEqual(len(audio), 1)
         self.assertEqual(audio[0]["tags"]["language"], "nld")
+
+    def test_cmaf_media_requests_keep_the_browser_origin_for_probe_and_both_inputs(self):
+        agent = "Mozilla/5.0 Chrome/154.0.0.0"
+        received = []
+
+        class OriginHandler(QuietHandler):
+            def do_GET(handler):
+                path = urlsplit(handler.path).path
+                if path != "/cmaf/master.m3u8":
+                    if handler.headers.get("Origin") != "https://f1tv.formula1.com":
+                        handler.send_error(403)
+                        return
+                    received.append((path, handler.headers.get("User-Agent")))
+                super(OriginHandler, handler).do_GET()
+
+        server = ThreadingHTTPServer(
+            ("127.0.0.1", 0), functools.partial(OriginHandler, directory=str(self.root))
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            url = f"http://127.0.0.1:{server.server_port}/cmaf/master.m3u8?token=private-fixture"
+            check_manifest(HttpClient().get_text(url))
+            with self.assertRaises(MediaError) as caught:
+                probe(url)
+            self.assertNotIn("private-fixture", str(caught.exception))
+            payload = probe(url, user_agent=agent)
+            primary = select_streams(payload, "eng", "160x90")
+            secondary = select_streams(payload, "nld", audio_only=True)
+            output = self.root / "cmaf-browser-result.mp4"
+            download(
+                url,
+                primary,
+                output,
+                secondary=(url, secondary),
+                user_agent=agent,
+                duration=1,
+            )
+            streams = self.inspect_output(output)
+            video = next(s for s in streams if s["codec_type"] == "video")
+            audio = [s for s in streams if s["codec_type"] == "audio"]
+            self.assertEqual((video["width"], video["height"]), (160, 90))
+            self.assertEqual([s["tags"]["language"] for s in audio], ["eng", "nld"])
+            self.assertTrue(any("init_" in path for path, _ in received))
+            self.assertTrue(any("segment_" in path for path, _ in received))
+            self.assertTrue(all(user_agent == agent for _, user_agent in received))
+            self.assertIn("HTTP 403", str(caught.exception))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
     @unittest.skipUnless(shutil.which("openssl"), "OpenSSL is not installed")
     def test_https_probe_and_download_verify_a_trusted_certificate(self):
@@ -353,6 +439,9 @@ class FFmpegIntegrationTests(unittest.TestCase):
                     handler.end_headers()
                     handler.wfile.write(body)
                 else:
+                    if handler.headers.get("Origin") != "https://f1tv.formula1.com":
+                        handler.send_error(403)
+                        return
                     if handler.headers.get("ascendontoken") or handler.headers.get(
                         "entitlementtoken"
                     ):

@@ -6,6 +6,7 @@ import uuid
 from dataclasses import dataclass
 
 from . import __version__
+from .config import BASE_URL
 
 # Public protocol versions from the supplied working browser recording.
 WEB_APP_VERSION = "55.0.5"
@@ -65,6 +66,10 @@ class WebClient:
             "sessionid": self.session_id,
             "correlationid": request_id(),
         }
+
+    def media_headers(self):
+        # CDN requests carry the public website origin, never API bearer tokens.
+        return {"User-Agent": self.user_agent, "Origin": BASE_URL}
 
     def as_dict(self):
         return {

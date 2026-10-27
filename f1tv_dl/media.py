@@ -16,7 +16,7 @@ from fractions import Fraction
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .config import USER_AGENT
+from .config import BASE_URL, USER_AGENT
 from .errors import DRMError, MediaError, OperationCancelled
 from .http import validate_media_url
 
@@ -77,6 +77,9 @@ def input_options(timeout: float, url: str, user_agent=None) -> list[str]:
         "-rw_timeout",
         str(int(timeout * 1_000_000)),
     ]
+    if user_agent:
+        # FFmpeg propagates HTTP headers to HLS variants, init files, and segments.
+        options += ["-headers", f"Origin: {BASE_URL}\r\n"]
     if urlsplit(url).scheme == "https":
         options += ["-tls_verify", "1"]
         if os.environ.get("SSL_CERT_FILE"):
@@ -93,12 +96,78 @@ def media_environment():
     return environment
 
 
+def media_failure(tool: str, status: int, diagnostics: str) -> MediaError:
+    """Classify diagnostics using fixed messages; raw output can contain bearer URLs."""
+    text = diagnostics.casefold()
+    http_status = re.search(r"(?:http error|server returned)\s+([45]\d{2})\b", text)
+    if re.search(
+        r"unrecognized option|option \S+ not found|error (?:setting|applying) option", text
+    ):
+        detail = (
+            "This FFmpeg build does not support a required option. "
+            "Install a current FFmpeg release."
+        )
+    elif any(
+        marker in text
+        for marker in (
+            "certificate verification failed",
+            "certificate verify failed",
+            "certificate is not trusted",
+            "unable to get local issuer certificate",
+            "peer's certificate",
+        )
+    ):
+        detail = (
+            "TLS certificate verification failed. "
+            "Check your system CA certificates and SSL_CERT_FILE."
+        )
+    elif http_status:
+        detail = f"The media server returned HTTP {http_status[1]}."
+        if http_status[1] in {"401", "403"}:
+            detail += " Sign in again and retry."
+        elif http_status[1] == "404":
+            detail += " The playlist or a media segment is unavailable."
+    elif any(
+        marker in text
+        for marker in ("name or service not known", "getaddrinfo", "failed to resolve")
+    ):
+        detail = "The media hostname could not be resolved. Check DNS and proxy settings."
+    elif "timed out" in text or "timeout" in text:
+        detail = (
+            "The media connection timed out. "
+            "Check network access or increase the timeout in Settings."
+        )
+    elif "connection refused" in text or "network is unreachable" in text:
+        detail = "The media server could not be reached. Check network and proxy settings."
+    elif "tls" in text and ("handshake" in text or "error" in text):
+        detail = "The TLS connection failed. Check proxy settings and CA trust."
+    elif "not on whitelist" in text or "protocol not found" in text:
+        detail = (
+            "This FFmpeg build cannot open a required media protocol. "
+            "Install a current FFmpeg release."
+        )
+    elif "allowed_extensions" in text or "allowed_segment_extensions" in text:
+        detail = "FFmpeg rejected a media segment's file type. Install a current FFmpeg release."
+    elif "decoder not found" in text or "unknown decoder" in text:
+        detail = "This FFmpeg build is missing a required decoder. Install a full FFmpeg build."
+    elif "moov atom not found" in text or "invalid data found" in text:
+        detail = "The playlist or media data could not be parsed. Update FFmpeg and retry."
+    else:
+        detail = "Check stream access, availability, and FFmpeg support."
+    prefix = (
+        f"{tool} failed (exit code {status})."
+        if status
+        else f"{tool} could not read any media streams."
+    )
+    return MediaError(f"{prefix} {detail}")
+
+
 def probe(url: str, *, timeout: float = 30.0, user_agent=None) -> dict:
     validate_media_url(url)
     command = [
         require_binary("ffprobe"),
         "-v",
-        "error",
+        "warning",
         *input_options(timeout, url, user_agent),
         "-show_streams",
         "-show_programs",
@@ -111,6 +180,8 @@ def probe(url: str, *, timeout: float = 30.0, user_agent=None) -> dict:
             command,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout + 15,
             check=False,
             env=media_environment(),
@@ -121,15 +192,16 @@ def probe(url: str, *, timeout: float = 30.0, user_agent=None) -> dict:
     except OSError:
         raise MediaError("FFprobe could not be started.") from None
     if result.returncode:
-        # FFprobe diagnostics may contain the complete signed URL. Never echo them.
-        raise MediaError("FFprobe could not read the stream. Check access and stream availability.")
+        raise media_failure("FFprobe", result.returncode, result.stderr)
     try:
         payload = json.loads(result.stdout)
         if not isinstance(payload, dict) or not isinstance(payload.get("streams"), list):
             raise ValueError
-        return payload
     except (ValueError, TypeError):
         raise MediaError("FFprobe returned invalid stream information.") from None
+    if not payload["streams"]:
+        raise media_failure("FFprobe", 0, result.stderr)
+    return payload
 
 
 def numeric(value) -> int:
@@ -251,7 +323,7 @@ def build_command(
         "-hide_banner",
         "-nostdin",
         "-loglevel",
-        "error",
+        "warning",
         "-nostats",
         "-progress",
         "pipe:1",
@@ -384,12 +456,12 @@ def download(
                 process.stdout.close()
                 if sys.stderr and sys.stderr.isatty():
                     print(file=sys.stderr)
+            errors.seek(0)
+            diagnostics = errors.read(65536).decode("utf-8", errors="replace") if status else ""
         if cancel is not None and cancel.is_set():
             raise OperationCancelled()
         if status:
-            raise MediaError(
-                f"FFmpeg failed (exit code {status}). Check stream access and codec support."
-            )
+            raise media_failure("FFmpeg", status, diagnostics)
         if temporary.stat().st_size == 0:
             raise MediaError("FFmpeg returned an empty download.")
         if overwrite:

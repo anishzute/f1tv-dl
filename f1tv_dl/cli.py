@@ -194,7 +194,7 @@ def run(args):
         print(playback.url)
         return
     agent = sessions.web_client.user_agent if sessions.web_client is not None else None
-    media_headers = {"User-Agent": agent} if agent else None
+    media_headers = sessions.web_client.media_headers() if sessions.web_client is not None else None
     check_manifest(http.get_text(playback.url, headers=media_headers, operation="Manifest lookup"))
     selected = select_streams(
         probe(playback.url, timeout=args.timeout, user_agent=agent),

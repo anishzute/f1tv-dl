@@ -143,7 +143,8 @@ class DesktopService:
         return client.user_agent if client is not None else None
 
     def manifest(self, url, operation="Manifest lookup"):
-        headers = {"User-Agent": self.media_user_agent} if self.media_user_agent else None
+        client = self.sessions.web_client
+        headers = client.media_headers() if client is not None else None
         return self.http.get_text(url, headers=headers, operation=operation)
 
     def inspect(self, content, channel=None, cancel=None):

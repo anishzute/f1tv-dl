@@ -189,9 +189,83 @@ class FFmpegTests(unittest.TestCase):
         self.assertNotIn("secret", str(caught.exception))
 
     def test_probe_valid_json(self):
-        result = Mock(returncode=0, stdout=json.dumps({"streams": []}))
+        payload = {"streams": [{"index": 0, "codec_type": "video"}]}
+        result = Mock(returncode=0, stdout=json.dumps(payload), stderr="")
         with (
             patch("f1tv_dl.media.require_binary", return_value="ffprobe"),
             patch("f1tv_dl.media.subprocess.run", return_value=result),
         ):
-            self.assertEqual(probe("https://cdn.test/a.mpd"), {"streams": []})
+            self.assertEqual(probe("https://cdn.test/a.mpd"), payload)
+
+    def test_probe_reports_safe_failure_causes_without_urls_or_credentials(self):
+        cases = (
+            ("[http @ 0x01] HTTP error 403 Forbidden", "HTTP 403"),
+            ("Server returned 404 Not Found", "HTTP 404"),
+            ("[tls @ 0x01] Certificate verification failed", "TLS certificate"),
+            ("Option tls_verify not found", "required option"),
+            ("Failed to resolve hostname private-cdn.test", "DNS and proxy"),
+            ("Connection timed out", "connection timed out"),
+            ("moov atom not found", "could not be parsed"),
+            ("Protocol 'https' not on whitelist 'file'", "required media protocol"),
+        )
+        for diagnostic, expected in cases:
+            with self.subTest(diagnostic=diagnostic):
+                result = Mock(
+                    returncode=1,
+                    stdout="",
+                    stderr=diagnostic
+                    + "\nhttps://private-cdn.test/a.mpd?token=private-token\n"
+                    + "Authorization: Bearer private-bearer\nCookie: private-cookie",
+                )
+                with (
+                    patch("f1tv_dl.media.require_binary", return_value="ffprobe"),
+                    patch("f1tv_dl.media.subprocess.run", return_value=result),
+                    self.assertRaises(MediaError) as caught,
+                ):
+                    probe("https://cdn.test/a.mpd?token=private-token")
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn("private-", message)
+                self.assertNotIn("https://", message)
+
+    def test_empty_probe_result_reports_media_rejection_even_with_zero_exit_status(self):
+        result = Mock(
+            returncode=0,
+            stdout='{"streams": []}',
+            stderr="HTTP error 403 Forbidden: https://cdn.test/a.mpd?token=private-token",
+        )
+        with (
+            patch("f1tv_dl.media.require_binary", return_value="ffprobe"),
+            patch("f1tv_dl.media.subprocess.run", return_value=result),
+            self.assertRaises(MediaError) as caught,
+        ):
+            probe("https://cdn.test/a.mpd?token=private-token")
+        self.assertIn("HTTP 403", str(caught.exception))
+        self.assertIn("could not read any media streams", str(caught.exception))
+        self.assertNotIn("private-token", str(caught.exception))
+
+    def test_download_reports_safe_http_status_and_removes_partial_file(self):
+        process = Mock()
+        process.stdout = io.StringIO()
+        process.wait.return_value = process.poll.return_value = 1
+
+        def launch(*args, **kwargs):
+            kwargs["stderr"].write(
+                b"HTTP error 403 Forbidden: https://cdn.test/stream?token=private-token"
+            )
+            return process
+
+        with tempfile.TemporaryDirectory() as directory:
+            with (
+                patch("f1tv_dl.media.require_binary", return_value="ffmpeg"),
+                patch("f1tv_dl.media.subprocess.Popen", side_effect=launch),
+                self.assertRaises(MediaError) as caught,
+            ):
+                download(
+                    "https://cdn.test/a.mpd?token=private-token",
+                    Selection(0, 1, "eng"),
+                    Path(directory) / "video.mp4",
+                )
+            self.assertIn("HTTP 403", str(caught.exception))
+            self.assertNotIn("private-token", str(caught.exception))
+            self.assertEqual(list(Path(directory).iterdir()), [])

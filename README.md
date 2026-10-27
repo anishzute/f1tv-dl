@@ -121,7 +121,9 @@ FFmpeg, without a browser.
 New browser sessions use the website's `WEB_DASH` entitlement endpoint and
 `WEB_HLS` playback API with both required tokens, device information, a shared
 session ID, and a fresh correlation ID for each request. The actual Chromium
-user agent is also used for manifest lookup, FFprobe, and FFmpeg. The requested
+user agent and F1 TV website origin are also used for manifest lookup, FFprobe,
+and FFmpeg, including HLS variant playlists, initialization files, and segments.
+The requested
 feed is selected from the returned playback feeds. Sign out and sign in once
 after upgrading to 1.3 to capture this browser context for an existing session.
 Legacy entitlement-only sessions remain readable.
@@ -186,6 +188,11 @@ verification, and CDN access. Signed URLs appear only for `--stream-url`; routin
 logs suppress them. HTTP 401 refreshes a cached login once; HTTP 403 reports an
 access problem without repeatedly submitting credentials.
 
+FFprobe and FFmpeg failures show a safe summary of the underlying cause, such as
+a media HTTP status, certificate verification failure, unsupported option, or
+invalid media data. Raw diagnostics and signed URLs stay private. An empty
+FFprobe result is treated as a failure even if FFprobe exits successfully.
+
 ## Options
 
 Run `f1tv-dl --help` for all options. Original flags remain available: `-c`, `-i`,
@@ -249,7 +256,9 @@ graphical sign-in, multiple feed selection, Unicode names, audio settings, queue
 completion, cancellation, folder selection, error recovery, and sign-out. Media
 integration tests also check the desktop service against real locally generated
 streams and FFmpeg progress, including required playback headers and matching
-browser identity across two queued downloads.
+browser identity across two queued downloads. Fragmented MP4 HLS tests also check
+browser origin headers on child playlists, initialization files, and segments,
+with primary and secondary audio inputs.
 Browser-flow tests use real Chromium with intercepted fixture pages and no live
 account credentials. Install the `browser` extra and run `playwright install chromium`
 to enable them. They cover direct identity-provider authorization,
