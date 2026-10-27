@@ -1,13 +1,21 @@
 """Small HTTP transport respecting system proxy settings and CA trust."""
 
 import json
+import ssl
 import time
+from contextlib import contextmanager
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, Request, build_opener, getproxies
 
 from .config import USER_AGENT
 from .errors import APIError, F1TVError
+
+
+def network_summary():
+    proxies = getproxies()
+    configured = any(proxies.get(scheme) for scheme in ("http", "https"))
+    return "HTTP proxy configured." if configured else "No HTTP proxy configured."
 
 
 def validate_media_url(url: str) -> str:
@@ -56,7 +64,17 @@ class HttpClient:
         self.retries = retries
         self.opener = build_opener(SafeRedirectHandler())
 
-    def request(self, url, *, params=None, headers=None, body=None, form=None, operation="Request"):
+    def request(
+        self,
+        url,
+        *,
+        params=None,
+        headers=None,
+        body=None,
+        form=None,
+        operation="Request",
+        stream=False,
+    ):
         validate_media_url(url)
         if params:
             url += ("&" if "?" in url else "?") + urlencode(params)
@@ -74,7 +92,10 @@ class HttpClient:
         request = Request(url, data=data, headers=request_headers)
         for attempt in range(self.retries + 1):
             try:
-                with self.opener.open(request, timeout=self.timeout) as response:
+                response = self.opener.open(request, timeout=self.timeout)
+                if stream:
+                    return response
+                with response:
                     return response.read()
             except HTTPError as error:
                 status = error.code
@@ -83,12 +104,30 @@ class HttpClient:
                     time.sleep(0.5 * (2**attempt))
                     continue
                 raise APIError(operation, status) from None
-            except (URLError, TimeoutError, OSError):
+            except (URLError, TimeoutError, OSError) as error:
+                if isinstance(getattr(error, "reason", error), ssl.SSLCertVerificationError):
+                    raise F1TVError(
+                        f"{operation} could not verify the server certificate. "
+                        "Check Python CA trust and SSL_CERT_FILE."
+                    ) from None
                 # Never retry password submissions or expose URLs containing signed tokens.
                 raise F1TVError(
                     f"{operation} could not connect. Check network access, proxy, and CA trust."
                 ) from None
         raise APIError(operation)  # Defensive; every loop path returns or raises.
+
+    @contextmanager
+    def open_stream(self, url, *, headers=None, operation="Media lookup"):
+        response = self.request(
+            url,
+            headers={"Accept": "*/*", "Accept-Encoding": "identity", **(headers or {})},
+            operation=operation,
+            stream=True,
+        )
+        try:
+            yield response
+        finally:
+            response.close()
 
     def get_json(self, url, **kwargs):
         raw = self.request(url, **kwargs)

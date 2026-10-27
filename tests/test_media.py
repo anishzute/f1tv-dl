@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -9,7 +10,16 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from f1tv_dl.errors import DRMError, MediaError, OperationCancelled
-from f1tv_dl.media import Selection, build_command, check_manifest, download, probe, select_streams
+from f1tv_dl.media import (
+    Selection,
+    build_command,
+    check_manifest,
+    download,
+    input_options,
+    media_environment,
+    probe,
+    select_streams,
+)
 
 
 def stream(index, kind, **fields):
@@ -93,6 +103,30 @@ class ManifestTests(unittest.TestCase):
 
 
 class FFmpegTests(unittest.TestCase):
+    def test_https_uses_pythons_ca_file_when_no_explicit_bundle_is_configured(self):
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch(
+                "f1tv_dl.media.ssl.get_default_verify_paths", return_value=Mock(cafile="roots.pem")
+            ),
+        ):
+            options = input_options(30, "https://cdn.test/master.m3u8")
+        self.assertEqual(options[options.index("-ca_file") + 1], "roots.pem")
+        self.assertEqual(options[options.index("-tls_verify") + 1], "1")
+
+    def test_explicit_ca_bundle_takes_priority_over_python_defaults(self):
+        with patch.dict(os.environ, {"SSL_CERT_FILE": "configured.pem"}):
+            options = input_options(30, "https://cdn.test/master.m3u8")
+        self.assertEqual(options[options.index("-ca_file") + 1], "configured.pem")
+
+    def test_local_relay_bypasses_proxy_and_preserves_remote_proxy_configuration(self):
+        proxy = "http://user:private-password@proxy.test:8080"
+        with patch.dict(os.environ, {"HTTPS_PROXY": proxy, "NO_PROXY": ".corp.test"}, clear=True):
+            environment = media_environment()
+        self.assertEqual(environment["https_proxy"], proxy)
+        self.assertIn(".corp.test", environment["no_proxy"].split(","))
+        self.assertIn("127.0.0.1", environment["no_proxy"].split(","))
+
     def test_cancel_stops_a_silent_process_and_removes_the_partial_file(self):
         cancel = threading.Event()
         processes = []

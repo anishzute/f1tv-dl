@@ -56,6 +56,8 @@ A desktop display and FFmpeg are required; the CLI Docker image stays headless.
 
 **Settings** provides audio offset, sample duration, network timeout, metadata
 country/entitlement, cache location, and an optional installed Chromium path.
+The media tools check also reports whether Python detects an HTTP proxy, without
+displaying the proxy URL or its credentials.
 **Copy playback link** copies the authorized URL without including it in the log.
 Select a single feed to use it. Escaped Unicode names and HTML entities in video
 metadata are decoded for display, and the app selects an available Unicode font.
@@ -213,8 +215,16 @@ Run `f1tv-dl --help` for all options. Original flags remain available: `-c`, `-i
 
 Country and entitlement settings affect metadata; they do not grant access or
 change your account region. Standard proxy variables and system CA trust apply
-to API requests. Configure the corresponding trust stores for Chromium and FFmpeg
-when using an intercepting proxy. TLS verification stays enabled.
+to API requests. HLS downloads and stream inspection use the same verified Python
+HTTP transport for playlists, initialization files, segments, and AES-128 keys.
+A private loopback relay supplies this media to FFmpeg, keeping signed upstream
+URLs out of its input arguments. Remote requests retain the configured proxy;
+loopback requests connect directly. This avoids differences between Python's CA
+trust and older Conda/GnuTLS FFmpeg builds.
+
+Native HTTPS inputs also receive `SSL_CERT_FILE`, or Python's default CA bundle
+when available. Configure Python and Chromium trust when using an intercepting
+proxy. TLS verification stays enabled, including on nested HLS resources.
 
 Exit codes: `0` success, `1` operational error, `2` invalid arguments, `130` cancelled.
 
@@ -259,6 +269,8 @@ streams and FFmpeg progress, including required playback headers and matching
 browser identity across two queued downloads. Fragmented MP4 HLS tests also check
 browser origin headers on child playlists, initialization files, and segments,
 with primary and secondary audio inputs.
+HTTPS integration tests verify trusted HLS downloads, reject an untrusted child
+playlist, and cover range requests, redirects, cleanup, and private relay access.
 Browser-flow tests use real Chromium with intercepted fixture pages and no live
 account credentials. Install the `browser` extra and run `playwright install chromium`
 to enable them. They cover direct identity-provider authorization,

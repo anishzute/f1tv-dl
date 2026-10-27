@@ -12,10 +12,29 @@ from test_models import FIXTURE, URL
 from f1tv_dl.cli import main, parser
 from f1tv_dl.config import default_session_path
 from f1tv_dl.errors import APIError, F1TVError
-from f1tv_dl.http import HttpClient, SafeRedirectHandler, validate_media_url
+from f1tv_dl.http import HttpClient, SafeRedirectHandler, network_summary, validate_media_url
 
 
 class HTTPTests(unittest.TestCase):
+    def test_streaming_response_is_not_buffered_and_is_closed_after_failure(self):
+        client = HttpClient()
+        response = Mock()
+        client.opener = Mock()
+        client.opener.open.return_value = response
+        with self.assertRaisesRegex(RuntimeError, "transfer interrupted"):
+            with client.open_stream("https://cdn.test/video.mp4") as opened:
+                self.assertIs(opened, response)
+                response.read.assert_not_called()
+                raise RuntimeError("transfer interrupted")
+        response.close.assert_called_once()
+
+    def test_proxy_diagnostics_never_display_proxy_credentials(self):
+        with patch(
+            "f1tv_dl.http.getproxies",
+            return_value={"https": "http://user:private-password@private-proxy.test:8080"},
+        ):
+            self.assertEqual(network_summary(), "HTTP proxy configured.")
+
     def test_oauth_form_is_urlencoded_and_post_failures_are_not_retried(self):
         client = HttpClient()
         response = Mock()

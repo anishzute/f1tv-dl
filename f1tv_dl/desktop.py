@@ -13,9 +13,10 @@ from .auth import Authenticator, SessionManager, SessionStore, token_is_fresh
 from .config import Settings, default_session_path
 from .errors import AuthenticationError, F1TVError, OperationCancelled
 from .http import HttpClient
-from .media import check_manifest, download, probe, require_binary, stop_process
+from .media import download, probe, require_binary, stop_process
 from .media import select_streams as select_media
 from .models import safe_filename
+from .relay import HLSRelay
 
 
 @dataclass(frozen=True)
@@ -147,11 +148,20 @@ class DesktopService:
         headers = client.media_headers() if client is not None else None
         return self.http.get_text(url, headers=headers, operation=operation)
 
+    def media_relay(self, cancel=None):
+        client = self.sessions.web_client
+        return HLSRelay(
+            self.http, headers=client.media_headers() if client is not None else None, cancel=cancel
+        )
+
     def inspect(self, content, channel=None, cancel=None):
         url = self.stream_url(content, channel)
         check_cancel(cancel)
-        check_manifest(self.manifest(url))
-        payload = probe(url, timeout=self.settings.timeout, user_agent=self.media_user_agent)
+        with self.media_relay(cancel) as relay:
+            url = relay.prepare(url, self.manifest(url))
+            payload = relay.run(
+                probe, url, timeout=self.settings.timeout, user_agent=self.media_user_agent
+            )
         check_cancel(cancel)
         streams = payload.get("streams", [])
         resolutions = {
@@ -192,43 +202,55 @@ class DesktopService:
         if status:
             status("Checking the selected video and audio...")
         url = self.stream_url(content, options.channel)
-        check_manifest(self.manifest(url))
-        check_cancel(cancel)
-        selected = select_media(
-            probe(url, timeout=self.settings.timeout, user_agent=self.media_user_agent),
-            options.audio,
-            options.resolution,
-        )
-        secondary = None
-        if international is not None:
+        with self.media_relay(cancel) as relay:
+            url = relay.prepare(url, self.manifest(url))
             check_cancel(cancel)
-            secondary_url = self.stream_url(content, "INTERNATIONAL")
-            check_manifest(self.manifest(secondary_url, operation="International manifest lookup"))
-            selected_audio = select_media(
-                probe(
-                    secondary_url, timeout=self.settings.timeout, user_agent=self.media_user_agent
+            selected = select_media(
+                relay.run(
+                    probe, url, timeout=self.settings.timeout, user_agent=self.media_user_agent
                 ),
-                options.international,
-                audio_only=True,
+                options.audio,
+                options.resolution,
             )
-            secondary = (secondary_url, selected_audio)
-        check_cancel(cancel)
-        if status:
-            status(f"Downloading {selected.width}x{selected.height}, audio {selected.language}...")
-        download(
-            url,
-            selected,
-            output,
-            overwrite=options.overwrite,
-            progress=progress,
-            cancel=cancel,
-            output_format=options.format,
-            secondary=secondary,
-            offset=options.offset,
-            duration=options.duration,
-            timeout=self.settings.timeout,
-            user_agent=self.media_user_agent,
-        )
+            secondary = None
+            if international is not None:
+                check_cancel(cancel)
+                secondary_url = self.stream_url(content, "INTERNATIONAL")
+                secondary_url = relay.prepare(
+                    secondary_url,
+                    self.manifest(secondary_url, operation="International manifest lookup"),
+                )
+                selected_audio = select_media(
+                    relay.run(
+                        probe,
+                        secondary_url,
+                        timeout=self.settings.timeout,
+                        user_agent=self.media_user_agent,
+                    ),
+                    options.international,
+                    audio_only=True,
+                )
+                secondary = (secondary_url, selected_audio)
+            check_cancel(cancel)
+            if status:
+                status(
+                    f"Downloading {selected.width}x{selected.height}, audio {selected.language}..."
+                )
+            relay.run(
+                download,
+                url,
+                selected,
+                output,
+                overwrite=options.overwrite,
+                progress=progress,
+                cancel=cancel,
+                output_format=options.format,
+                secondary=secondary,
+                offset=options.offset,
+                duration=options.duration,
+                timeout=self.settings.timeout,
+                user_agent=self.media_user_agent,
+            )
         return output.resolve()
 
     def download_many(

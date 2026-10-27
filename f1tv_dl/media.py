@@ -6,6 +6,7 @@ import os
 import queue
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -82,8 +83,9 @@ def input_options(timeout: float, url: str, user_agent=None) -> list[str]:
         options += ["-headers", f"Origin: {BASE_URL}\r\n"]
     if urlsplit(url).scheme == "https":
         options += ["-tls_verify", "1"]
-        if os.environ.get("SSL_CERT_FILE"):
-            options += ["-ca_file", os.environ["SSL_CERT_FILE"]]
+        ca_file = os.environ.get("SSL_CERT_FILE") or ssl.get_default_verify_paths().cafile
+        if ca_file:
+            options += ["-ca_file", ca_file]
     return options
 
 
@@ -93,6 +95,10 @@ def media_environment():
     for name in ("http_proxy", "https_proxy", "no_proxy"):
         if name not in environment and name.upper() in environment:
             environment[name] = environment[name.upper()]
+    # The private HLS relay is local; remote traffic retains the configured proxies.
+    environment["no_proxy"] = ",".join(
+        filter(None, (environment.get("no_proxy", ""), "localhost", "127.0.0.1", "::1"))
+    )
     return environment
 
 

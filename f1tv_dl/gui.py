@@ -15,6 +15,7 @@ from . import __version__
 from .config import Settings
 from .desktop import DesktopService, DownloadOptions, install_browser_support
 from .errors import F1TVError, OperationCancelled
+from .http import network_summary
 from .text import display_text
 
 try:
@@ -484,13 +485,14 @@ class DownloaderApp:
 
     def check_tools(self):
         missing = [name for name in ("ffmpeg", "ffprobe") if not shutil.which(name)]
-        self.tool_status.set(
+        tools = (
             "FFmpeg and FFprobe are ready."
             if not missing
             else "Missing: "
             + ", ".join(missing)
             + ". Install FFmpeg, then restart the app or check again."
         )
+        self.tool_status.set(tools + "\n" + network_summary())
 
     def _account_fields(self):
         method = METHODS[self.method.get()]

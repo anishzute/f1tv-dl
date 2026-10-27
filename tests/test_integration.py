@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
+from contextlib import contextmanager
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -19,10 +20,11 @@ from test_models import FIXTURE, URL
 from f1tv_dl.auth import SessionCredentials, SessionManager, SessionStore
 from f1tv_dl.cli import main
 from f1tv_dl.desktop import DesktopService, DownloadOptions
-from f1tv_dl.errors import APIError, MediaError
+from f1tv_dl.errors import APIError, F1TVError, MediaError
 from f1tv_dl.http import HttpClient
 from f1tv_dl.media import check_manifest, download, probe, select_streams
 from f1tv_dl.models import Content, ContentRef
+from f1tv_dl.relay import HLSRelay
 from f1tv_dl.web import WebClient
 
 
@@ -280,10 +282,10 @@ class FFmpegIntegrationTests(unittest.TestCase):
             server.server_close()
             thread.join(timeout=2)
 
-    @unittest.skipUnless(shutil.which("openssl"), "OpenSSL is not installed")
-    def test_https_probe_and_download_verify_a_trusted_certificate(self):
-        certificate = self.root / "test-ca.pem"
-        key = self.root / "test-key.pem"
+    @contextmanager
+    def tls_server(self, name="trusted-media", handler=QuietHandler):
+        certificate = self.root / (name + "-ca.pem")
+        key = self.root / (name + "-key.pem")
         subprocess.run(
             [
                 shutil.which("openssl"),
@@ -307,7 +309,7 @@ class FFmpegIntegrationTests(unittest.TestCase):
             check=True,
             timeout=15,
         )
-        handler = functools.partial(QuietHandler, directory=str(self.root))
+        handler = functools.partial(handler, directory=str(self.root))
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(certificate, key)
@@ -315,16 +317,110 @@ class FFmpegIntegrationTests(unittest.TestCase):
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
-            url = f"https://127.0.0.1:{server.server_port}/dash/master.mpd"
+            yield f"https://127.0.0.1:{server.server_port}", certificate
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    @unittest.skipUnless(shutil.which("openssl"), "OpenSSL is not installed")
+    def test_https_probe_and_download_verify_a_trusted_certificate(self):
+        with self.tls_server() as (base, certificate):
+            url = base + "/dash/master.mpd"
             with patch.dict(os.environ, {"SSL_CERT_FILE": str(certificate)}):
                 check_manifest(HttpClient().get_text(url))
                 selected = select_streams(probe(url), "eng")
                 output = self.root / "https-result.mp4"
                 download(url, selected, output, duration=1)
             self.assertTrue(output.stat().st_size > 0)
-        finally:
-            server.shutdown()
-            server.server_close()
+
+    @unittest.skipUnless(shutil.which("openssl"), "OpenSSL is not installed")
+    def test_desktop_hls_uses_verified_python_https_with_both_audio_inputs(self):
+        agent = "Mozilla/5.0 Chrome/154.0.0.0"
+        received = []
+
+        class BrowserMediaHandler(QuietHandler):
+            def do_GET(handler):
+                if (
+                    handler.headers.get("Origin") != "https://f1tv.formula1.com"
+                    or handler.headers.get("User-Agent") != agent
+                    or handler.headers.get("entitlementtoken")
+                    or handler.headers.get("ascendontoken")
+                ):
+                    handler.send_error(403)
+                    return
+                received.append(handler.path)
+                super(BrowserMediaHandler, handler).do_GET()
+
+        native_probe = probe
+        probed = []
+
+        def observe_probe(url, **kwargs):
+            probed.append(urlsplit(url))
+            return native_probe(url, **kwargs)
+
+        with self.tls_server(handler=BrowserMediaHandler) as (base, certificate):
+            service = DesktopService(session_path=self.root / "hls-tls-session.json")
+            service.sessions = SessionManager(
+                SessionStore(None),
+                lambda: None,
+                token=SessionCredentials("entitlement", "subscription", WebClient.create(agent)),
+            )
+            service.stream_url = lambda *args: base + "/cmaf/master.m3u8?token=private-fixture"
+            content = Content.from_response(ContentRef.parse(URL), FIXTURE)
+            with (
+                patch.dict(os.environ, {"SSL_CERT_FILE": str(certificate)}),
+                patch("f1tv_dl.desktop.probe", side_effect=observe_probe),
+            ):
+                # Construct HTTPSHandler after configuring this fixture's private CA.
+                service.http = HttpClient()
+                output = service.download(
+                    content,
+                    DownloadOptions(
+                        self.root / "python-https",
+                        resolution="160x90",
+                        international="nld",
+                        duration=1,
+                    ),
+                )
+            streams = self.inspect_output(output)
+            self.assertEqual(next(s for s in streams if s["codec_type"] == "video")["width"], 160)
+            self.assertEqual(
+                [s["tags"]["language"] for s in streams if s["codec_type"] == "audio"],
+                ["eng", "nld"],
+            )
+            self.assertEqual(len(probed), 2)
+            self.assertTrue(all(p.scheme == "http" and p.hostname == "127.0.0.1" for p in probed))
+            self.assertTrue(any("init_" in p for p in received))
+            self.assertTrue(any("segment_" in p for p in received))
+
+    @unittest.skipUnless(shutil.which("openssl"), "OpenSSL is not installed")
+    def test_hls_child_playlist_requires_a_trusted_certificate(self):
+        with self.tls_server(name="untrusted-child") as (child, _):
+
+            class RootHandler(QuietHandler):
+                def do_GET(handler):
+                    body = (
+                        "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100000\n"
+                        + child
+                        + "/cmaf/stream_2.m3u8\n"
+                    ).encode()
+                    handler.send_response(200)
+                    handler.send_header("Content-Length", str(len(body)))
+                    handler.end_headers()
+                    handler.wfile.write(body)
+
+            with self.tls_server(name="trusted-root", handler=RootHandler) as (base, certificate):
+                with patch.dict(os.environ, {"SSL_CERT_FILE": str(certificate)}):
+                    http = HttpClient(retries=0)
+                    remote = base + "/master.m3u8?token=private-fixture"
+                    manifest = http.get_text(remote)
+                    with HLSRelay(http) as relay:
+                        local = relay.prepare(remote, manifest)
+                        with self.assertRaises(F1TVError) as caught:
+                            relay.run(probe, local)
+                    self.assertIn("certificate", str(caught.exception))
+                    self.assertNotIn("private-fixture", str(caught.exception))
 
     def test_cli_download_with_real_media_pipeline(self):
         real_http = HttpClient()

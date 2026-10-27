@@ -15,8 +15,9 @@ from .auth import Authenticator, SessionManager, SessionStore
 from .config import Settings, default_session_path
 from .errors import AuthenticationError, F1TVError
 from .http import HttpClient
-from .media import check_manifest, download, probe, require_binary, select_streams
+from .media import download, probe, require_binary, select_streams
 from .models import ContentRef, safe_filename
+from .relay import HLSRelay
 
 LOG = logging.getLogger(__name__)
 
@@ -195,48 +196,54 @@ def run(args):
         return
     agent = sessions.web_client.user_agent if sessions.web_client is not None else None
     media_headers = sessions.web_client.media_headers() if sessions.web_client is not None else None
-    check_manifest(http.get_text(playback.url, headers=media_headers, operation="Manifest lookup"))
-    selected = select_streams(
-        probe(playback.url, timeout=args.timeout, user_agent=agent),
-        args.audio_stream,
-        args.video_size,
-    )
-    secondary = None
-    if international is not None:
-        secondary_playback = client.playback(content, international, sessions)
-        check_manifest(
-            http.get_text(
+    with HLSRelay(http, headers=media_headers) as relay:
+        url = relay.prepare(
+            playback.url,
+            http.get_text(playback.url, headers=media_headers, operation="Manifest lookup"),
+        )
+        selected = select_streams(
+            relay.run(probe, url, timeout=args.timeout, user_agent=agent),
+            args.audio_stream,
+            args.video_size,
+        )
+        secondary = None
+        if international is not None:
+            secondary_playback = client.playback(content, international, sessions)
+            secondary_url = relay.prepare(
                 secondary_playback.url,
-                headers=media_headers,
-                operation="International manifest lookup",
+                http.get_text(
+                    secondary_playback.url,
+                    headers=media_headers,
+                    operation="International manifest lookup",
+                ),
             )
+            secondary_selection = select_streams(
+                relay.run(probe, secondary_url, timeout=args.timeout, user_agent=agent),
+                args.international_audio,
+                audio_only=True,
+            )
+            secondary = (secondary_url, secondary_selection)
+        LOG.info(
+            "Downloading %s (%sx%s, audio %s) to %s",
+            channel.title if channel else content.title,
+            selected.width,
+            selected.height,
+            selected.language,
+            output,
         )
-        secondary_selection = select_streams(
-            probe(secondary_playback.url, timeout=args.timeout, user_agent=agent),
-            args.international_audio,
-            audio_only=True,
+        relay.run(
+            download,
+            url,
+            selected,
+            output,
+            overwrite=args.overwrite,
+            output_format=args.format,
+            secondary=secondary,
+            offset=args.itsoffset,
+            duration=args.duration,
+            timeout=args.timeout,
+            user_agent=agent,
         )
-        secondary = (secondary_playback.url, secondary_selection)
-    LOG.info(
-        "Downloading %s (%sx%s, audio %s) to %s",
-        channel.title if channel else content.title,
-        selected.width,
-        selected.height,
-        selected.language,
-        output,
-    )
-    download(
-        playback.url,
-        selected,
-        output,
-        overwrite=args.overwrite,
-        output_format=args.format,
-        secondary=secondary,
-        offset=args.itsoffset,
-        duration=args.duration,
-        timeout=args.timeout,
-        user_agent=agent,
-    )
     LOG.info("Download complete: %s", output)
 
 
