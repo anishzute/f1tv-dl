@@ -3,8 +3,10 @@
 import logging
 import os
 import re
+import shutil
 import time
 from contextlib import suppress
+from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from .auth import SessionCredentials
@@ -60,6 +62,114 @@ def proxy_options():
         return result
     except ValueError:
         raise AuthenticationError("The configured browser proxy URL is invalid.") from None
+
+
+def browser_environment():
+    """Keep desktop/network settings while excluding Conda's browser library overrides."""
+    environment = os.environ.copy()
+    prefixes = [
+        os.path.abspath(value)
+        for key, value in environment.items()
+        if value and (key == "CONDA_PREFIX" or re.fullmatch(r"CONDA_PREFIX_\d+", key))
+    ]
+
+    def conda_path(value):
+        if not os.path.isabs(value):
+            return False
+        for prefix in prefixes:
+            try:
+                if os.path.commonpath((os.path.abspath(value), prefix)) == prefix:
+                    return True
+            except ValueError:
+                continue
+        return False
+
+    for name in ("LD_LIBRARY_PATH", "GTK_PATH", "GIO_EXTRA_MODULES"):
+        if name in environment and prefixes:
+            paths = [p for p in environment[name].split(os.pathsep) if not conda_path(p)]
+            if any(paths):
+                environment[name] = os.pathsep.join(paths)
+            else:
+                environment.pop(name)
+    if "LD_PRELOAD" in environment and prefixes:
+        paths = [
+            p for p in re.split(r"[:\s]+", environment["LD_PRELOAD"]) if p and not conda_path(p)
+        ]
+        if paths:
+            environment["LD_PRELOAD"] = " ".join(paths)
+        else:
+            environment.pop("LD_PRELOAD")
+    for name in ("GIO_MODULE_DIR", "GTK_EXE_PREFIX"):
+        if name in environment and conda_path(environment[name]):
+            environment.pop(name)
+    for name in ("F1TV_PASSWORD", "F1TV_PASS", "F1TV_TOKEN", "F1TV_USER"):
+        environment.pop(name, None)
+    return environment
+
+
+def installed_chromium():
+    for name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
+        executable = shutil.which(name)
+        if executable:
+            return executable
+    candidates = [Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")]
+    for name in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
+        if os.environ.get(name):
+            candidates.append(Path(os.environ[name]) / "Google/Chrome/Application/chrome.exe")
+    return next((str(path) for path in candidates if path.is_file()), None)
+
+
+def display_failure(detail):
+    return any(
+        marker in detail.lower()
+        for marker in (
+            "missing x server",
+            "without having a xserver",
+            "cannot open display",
+            "failed to connect to wayland display",
+            "authorization required, but no authorization protocol",
+        )
+    )
+
+
+def start_browser(
+    playwright, browser_error, *, headless=False, executable=None, cancel=None, status=None
+):
+    check_cancel(cancel)
+    candidates = [executable]
+    if not executable:
+        installed = installed_chromium()
+        if installed:
+            candidates.append(installed)
+    for index, candidate in enumerate(candidates):
+        check_cancel(cancel)
+        browser = None
+        ready = False
+        try:
+            options = {"headless": headless, "env": browser_environment()}
+            if candidate:
+                options["executable_path"] = candidate
+            proxy = proxy_options()
+            if proxy:
+                options["proxy"] = proxy
+            browser = playwright.chromium.launch(**options)
+            context = browser.new_context()
+            page = context.new_page()
+            client = WebClient.create(page.evaluate("navigator.userAgent"), browser.version)
+            check_cancel(cancel)
+            ready = True
+            return browser, context, page, client
+        except browser_error as error:
+            if index + 1 == len(candidates):
+                raise AuthenticationError(browser_error_message(error, startup=True)) from None
+            message = "Bundled Chromium could not start. Trying installed Chrome/Chromium..."
+            LOG.info(message)
+            if status:
+                status(message)
+        finally:
+            if browser is not None and not ready:
+                with suppress(browser_error):
+                    browser.close()
 
 
 class BrowserAuthorization:
@@ -154,8 +264,40 @@ class BrowserAuthorization:
         )
 
 
-def browser_error_message(error):
+def browser_error_message(error, *, startup=False):
     detail = str(error)
+    lowered = detail.lower()
+    if display_failure(detail):
+        return (
+            "Chromium could not connect to the desktop display. "
+            "On WSL, check your WSLg or X server session, DISPLAY, and XAUTHORITY."
+        )
+    missing = re.search(r"error while loading shared libraries:\s*([A-Za-z0-9_.+-]+)", detail)
+    if missing or "host system is missing dependencies" in lowered:
+        library = f" Missing library: {missing[1]}." if missing else ""
+        return (
+            "Chromium is missing required system libraries."
+            + library
+            + " On Ubuntu/WSL, run: python -m playwright install-deps chromium"
+        )
+    if (
+        any(marker in detail for marker in ("GLIBCXX_", "CXXABI_", "GLIBC_"))
+        or "symbol lookup error" in lowered
+    ):
+        return (
+            "Chromium could not load compatible system libraries. "
+            "Check Conda library overrides, or choose an installed Chrome/Chromium in Settings."
+        )
+    if "no space left on device" in lowered:
+        return (
+            "Chromium could not start because the disk or temporary directory is full. "
+            "Free space and retry."
+        )
+    if "no usable sandbox" in lowered or "failed to move to new namespace" in lowered:
+        return (
+            "Chromium could not initialize its process sandbox. "
+            "Check the installed browser and WSL configuration."
+        )
     if "ERR_CERT_" in detail or "certificate" in detail.lower():
         return (
             "Chromium could not verify the sign-in website certificate. "
@@ -163,6 +305,14 @@ def browser_error_message(error):
         )
     if "Executable doesn't exist" in detail:
         return "Chromium is not installed. Install browser support, then retry."
+    if startup:
+        code = re.search(r"exitCode=(-?\d+)", detail)
+        signal = re.search(r"signal=(SIG[A-Z0-9]+)", detail)
+        reason = f" (exit code {code[1]})" if code else f" ({signal[1]})" if signal else ""
+        return (
+            f"Chromium could not start{reason}. Click Install browser support, "
+            "or select an installed Chrome/Chromium executable in Settings."
+        )
     if "closed" in detail.lower():
         return "Chromium closed before sign-in finished. Please try again."
     return (
@@ -197,31 +347,33 @@ def browser_login(
     oauth = OAuthSession.discover(http)
     check_cancel(cancel)
     browser = None
+    starting = True
     try:
         with sync_playwright() as playwright:
             try:
-                options = {"headless": headless}
-                if executable:
-                    options["executable_path"] = executable
-                proxy = proxy_options()
-                if proxy:
-                    options["proxy"] = proxy
-                browser = playwright.chromium.launch(**options)
-                context = browser.new_context()
-                page = context.new_page()
-                web_client = WebClient.create(page.evaluate("navigator.userAgent"), browser.version)
+                if status:
+                    status("Starting the sign-in browser...")
+                browser, context, page, web_client = start_browser(
+                    playwright,
+                    Error,
+                    headless=headless,
+                    executable=executable,
+                    cancel=cancel,
+                    status=status,
+                )
                 flow = BrowserAuthorization(
                     context, oauth, username, password, cancel=cancel, status=status
                 )
                 flow.emit("Opening F1 sign-in directly in Chromium...")
                 page.goto(oauth.authorization_url, wait_until="commit", timeout=15000)
+                starting = False
                 flow.wait(timeout, Error)
             finally:
                 if browser is not None:
                     with suppress(Error):
                         browser.close()
     except Error as error:
-        raise AuthenticationError(browser_error_message(error)) from None
+        raise AuthenticationError(browser_error_message(error, startup=starting)) from None
     check_cancel(cancel)
     subscription = oauth.exchange(http)
     check_cancel(cancel)

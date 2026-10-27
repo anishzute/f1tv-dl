@@ -120,6 +120,14 @@ required unless `--headless` is selected. Use `--browser-executable PATH` for an
 installed Chromium browser. The default Docker image contains the core client and
 FFmpeg, without a browser.
 
+If bundled Chromium cannot start, the app tries an installed Chrome/Chromium before
+opening the sign-in page. A configured Chromium executable takes priority. Conda
+library overrides are excluded from the browser process while desktop, proxy, and
+certificate settings are preserved. Startup errors identify missing libraries,
+display problems, incompatible libraries, or the process exit code when available.
+For missing Linux dependencies, run `python -m playwright install-deps chromium`.
+WSL graphical sign-in requires a working WSLg or X server desktop session.
+
 New browser sessions use the website's `WEB_DASH` entitlement endpoint and
 `WEB_HLS` playback API with both required tokens, device information, a shared
 session ID, and a fresh correlation ID for each request. The actual Chromium
@@ -275,6 +283,8 @@ Browser-flow tests use real Chromium with intercepted fixture pages and no live
 account credentials. Install the `browser` extra and run `playwright install chromium`
 to enable them. They cover direct identity-provider authorization,
 query and fragment callbacks, popups, safe credential entry, state rejection, and
-PKCE code exchange without loading the account application. Public protocol fields
+PKCE code exchange without loading the account application. Startup tests cover
+installed-browser fallback, an incompatible Conda library, missing display,
+cancellation, and safe launch diagnostics. Public protocol fields
 from the supplied Firefox recording are retained in a sanitized fixture; the HAR,
 recorded credentials, tokens, and signed media URLs are excluded.

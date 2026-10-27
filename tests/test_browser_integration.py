@@ -4,14 +4,17 @@ import base64
 import hashlib
 import importlib.util
 import json
+import os
 import shutil
+import sys
+import tempfile
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlencode, urlsplit
 
-from f1tv_dl.browser import BrowserAuthorization
+from f1tv_dl.browser import BrowserAuthorization, start_browser
 from f1tv_dl.errors import AuthenticationError, OperationCancelled
 from f1tv_dl.oauth import REDIRECT_URI, OAuthSession
 
@@ -42,6 +45,7 @@ class BrowserOAuthIntegrationTests(unittest.TestCase):
             executable = shutil.which("chromium") or shutil.which("google-chrome")
         if not executable:
             raise unittest.SkipTest("Chromium is not installed; run playwright install chromium")
+        cls.executable = executable
         cls.browser = cls.playwright.chromium.launch(executable_path=executable, headless=True)
         cls.addClassCleanup(cls.browser.close)
 
@@ -201,3 +205,33 @@ class BrowserOAuthIntegrationTests(unittest.TestCase):
         self.page.close()
         with self.assertRaisesRegex(AuthenticationError, "browser closed"):
             self.flow.wait(2, self.browser_error)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux dynamic library test")
+    def test_conda_library_override_cannot_break_chromium_startup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            library = Path(directory) / "lib"
+            library.mkdir()
+            (library / "libnss3.so").write_bytes(b"incompatible Conda library")
+            environment = {**os.environ, "CONDA_PREFIX": directory, "LD_LIBRARY_PATH": str(library)}
+            with self.assertRaises(self.browser_error):
+                self.playwright.chromium.launch(
+                    executable_path=self.executable, headless=True, env=environment
+                )
+            with patch.dict(os.environ, environment, clear=True):
+                browser, context, page, client = start_browser(
+                    self.playwright, self.browser_error, executable=self.executable, headless=True
+                )
+            try:
+                self.assertTrue(page.evaluate("navigator.userAgent").startswith("Mozilla/"))
+                self.assertTrue(client.user_agent.startswith("Mozilla/"))
+                self.assertEqual(context.cookies(), [])
+            finally:
+                browser.close()
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux desktop display test")
+    def test_real_startup_without_a_display_reports_the_display_problem(self):
+        with patch.dict(os.environ, {"DISPLAY": ":98765", "WAYLAND_DISPLAY": "invalid-display"}):
+            with self.assertRaisesRegex(AuthenticationError, "desktop display"):
+                start_browser(
+                    self.playwright, self.browser_error, executable=self.executable, headless=False
+                )
