@@ -104,6 +104,12 @@ class BrowserDataTests(unittest.TestCase):
             ),
             "callback",
         )
+        self.assertEqual(
+            account_shell_stage(
+                "https://account.formula1.com/?code=fixture&state=fixture#//login/"
+            ),
+            "callback",
+        )
         for url in (
             "https://id.formula1.com/as/authorize",
             "https://account.formula1.com/#/en/my-account",

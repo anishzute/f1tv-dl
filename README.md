@@ -42,6 +42,7 @@ A desktop display and FFmpeg are required; the CLI Docker image stays headless.
    F1's identity-provider redirect. The status bar shows each sign-in stage.
    A stalled account loading screen is refreshed once automatically. The browser
    closes when sign-in completes, even if the website still shows the F1 logo.
+   This also handles F1's `#//login/` callback route without changing its sign-in parameters.
 2. On **Download**, paste your video URL and click **Load video**. Choose a feed
    from the table. Channel listing also works before signing in.
 3. Select quality and audio. **Check streams** discovers the actual resolutions

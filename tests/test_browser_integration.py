@@ -17,7 +17,8 @@ HOME = "https://f1tv.formula1.com/"
 ACCOUNT = "https://account.formula1.com/login"
 IDP = "https://id.formula1.com/as/authorize"
 FINISH = "https://f1tv.formula1.com/signed-in"
-CALLBACK = "https://account.formula1.com/?code=fixture&state=fixture#/en/login"
+# F1's configured OAuth redirect omits the locale, including the doubled slash.
+CALLBACK = "https://account.formula1.com/?code=fixture&state=fixture#//login/"
 ACCESS_CLAIMS = (
     base64.urlsafe_b64encode(json.dumps({"subscriptionToken": "fixture-subscription"}).encode())
     .decode()

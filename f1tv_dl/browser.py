@@ -110,7 +110,8 @@ def account_shell_stage(url):
         return None
     parts = urlsplit(url)
     route, _, query = parts.fragment.partition("?")
-    if parts.path not in {"", "/"} or route.rstrip("/") not in {"", "/en/login"}:
+    # F1 configures its OAuth redirect as /#//login/; the locale is intentionally absent.
+    if parts.path not in {"", "/"} or route.rstrip("/") not in {"", "/en/login", "//login"}:
         return None
     params = parse_qs(parts.query + "&" + query)
     return "callback" if "code" in params or "state" in params else "login"
