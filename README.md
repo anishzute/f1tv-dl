@@ -49,7 +49,7 @@ A desktop display and FFmpeg are required; the CLI Docker image stays headless.
    and languages when a single feed is selected. Settings apply to every selected
    feed. Extra international audio is optional.
 4. Click **Choose folder**, select MP4 or TS, and click **Download video** (or
-   **Download selected** for multiple feeds). Feeds download one at a time into
+   **Download selected** for multiple feeds) in the bottom bar. Feeds download one at a time into
    separate files. The table shows each feed's queue status; the app shows progress,
    output size, and download speed. A failed feed does not stop the remaining queue.
    **Cancel** stops the queue and removes the current incomplete video, keeping
@@ -62,7 +62,9 @@ displaying the proxy URL or its credentials.
 **Copy playback link** copies the authorized URL without including it in the log.
 Select a single feed to use it. Escaped Unicode names and HTML entities in video
 metadata are decoded for display, and the app selects an available Unicode font.
-The status and Cancel button remain visible while the tabs scroll in smaller windows.
+The interface groups video, quality, and save options into separate panels, with
+feed checkboxes and a sign-in indicator. Status and Cancel remain visible while
+the tabs scroll in smaller windows; Download stays visible on the Download tab.
 
 Sign-in and downloads run in background workers so the window stays responsive.
 **Remember sign-in** stores the subscription and entitlement tokens using the same protected cache

@@ -36,6 +36,17 @@ LANGUAGES = {
     "Track effects": "fx",
     "Team radio": "tea",
 }
+COLORS = {
+    "page": "#eef1f6",
+    "card": "#ffffff",
+    "text": "#172033",
+    "muted": "#66758b",
+    "accent": "#db303b",
+    "accent_hover": "#ba2330",
+    "border": "#dce2eb",
+    "field": "#f7f9fc",
+    "hero": "#172133",
+}
 
 
 def clock_time(seconds):
@@ -130,10 +141,13 @@ class DownloaderApp:
         self.tool_status = tk.StringVar()
 
     def _style(self):
+        colors = COLORS
         self.root.title("F1 TV Downloader")
-        self.root.geometry("960x850")
+        width = min(1080, max(820, self.root.winfo_screenwidth() - 100))
+        height = min(940, max(640, self.root.winfo_screenheight() - 100))
+        self.root.geometry(f"{width}x{height}")
         self.root.minsize(820, 640)
-        self.root.configure(background="#f5f5f7")
+        self.root.configure(background=colors["page"])
         default_font = font.nametofont("TkDefaultFont")
         families = set(font.families(self.root))
         family = next(
@@ -149,94 +163,298 @@ class DownloaderApp:
             font.nametofont(name).configure(family=family)
         self.style = ttk.Style(self.root)
         self.style.theme_use("clam")
-        self.style.configure(".", font=default_font)
-        self.style.configure("TFrame", background="#f5f5f7")
-        self.style.configure("TLabel", background="#f5f5f7", foreground="#20232b")
-        self.style.configure("Muted.TLabel", foreground="#646975")
-        self.style.configure("Title.TLabel", font=(default_font.actual("family"), 23, "bold"))
-        self.style.configure("Section.TLabel", font=(default_font.actual("family"), 12, "bold"))
+        self.style.configure(
+            ".", font=default_font, background=colors["card"], foreground=colors["text"]
+        )
+        self.style.configure("TFrame", background=colors["card"])
+        self.style.configure("Page.TFrame", background=colors["page"])
+        self.style.configure(
+            "Card.TFrame",
+            background=colors["card"],
+            bordercolor=colors["border"],
+            lightcolor=colors["border"],
+            darkcolor=colors["border"],
+            borderwidth=1,
+            relief="solid",
+        )
+        self.style.configure("Hero.TFrame", background=colors["hero"])
+        self.style.configure("TLabel", background=colors["card"], foreground=colors["text"])
+        self.style.configure("Muted.TLabel", foreground=colors["muted"])
+        self.style.configure(
+            "PageMuted.TLabel", background=colors["page"], foreground=colors["muted"]
+        )
+        family = default_font.actual("family")
+        self.style.configure(
+            "Title.TLabel", background=colors["hero"], foreground="white", font=(family, 23, "bold")
+        )
+        self.style.configure("Subtitle.TLabel", background=colors["hero"], foreground="#b3bfd2")
+        self.style.configure("Section.TLabel", font=(family, 13, "bold"))
+        self.style.configure("Video.TLabel", font=(family, 11, "bold"))
+        self.style.configure(
+            "Step.TLabel",
+            background="#fff0f1",
+            foreground=colors["accent"],
+            padding=(8, 5),
+            font=(family, 9, "bold"),
+        )
+        self.style.configure(
+            "Count.TLabel",
+            background=colors["field"],
+            foreground=colors["muted"],
+            padding=(10, 6),
+            font=(family, 9, "bold"),
+        )
+        self.style.configure(
+            "SignedIn.TLabel",
+            background="#194238",
+            foreground="#b0ead3",
+            padding=(12, 7),
+            font=(family, 9, "bold"),
+        )
+        self.style.configure(
+            "SignedOut.TLabel",
+            background="#29364b",
+            foreground="#d0d9e7",
+            padding=(12, 7),
+            font=(family, 9, "bold"),
+        )
         self.style.configure(
             "TButton",
-            padding=(13, 8),
-            background="white",
-            bordercolor="#cfd3dc",
-            lightcolor="white",
-            darkcolor="white",
+            padding=(14, 9),
+            background=colors["card"],
+            foreground=colors["text"],
+            bordercolor=colors["border"],
+            lightcolor=colors["card"],
+            darkcolor=colors["card"],
+            borderwidth=1,
+            relief="flat",
+            focuscolor=colors["accent"],
         )
-        self.style.map("TButton", background=[("active", "#e9ecf2")])
+        self.style.map(
+            "TButton",
+            background=[("active", colors["field"])],
+            foreground=[("disabled", "#9aa6b6")],
+        )
+        self.style.configure("Compact.TButton", padding=(11, 6), font=(family, 9))
         for widget in ("TCheckbutton", "TRadiobutton"):
-            self.style.configure(widget, background="#f5f5f7")
-        self.style.configure("TCombobox", fieldbackground="white", background="#e9ecf2")
-        self.style.configure("Primary.TButton", foreground="white", background="#d92727")
-        self.style.map(
-            "Primary.TButton", background=[("disabled", "#bfc1c7"), ("active", "#b91f1f")]
+            self.style.configure(
+                widget,
+                background=colors["card"],
+                foreground=colors["text"],
+                indicatormargin=(0, 2, 6, 2),
+            )
+            self.style.map(
+                widget,
+                background=[("active", colors["card"])],
+                foreground=[("disabled", "#9aa6b6")],
+            )
+        self.style.configure(
+            "TEntry",
+            padding=(9, 8),
+            fieldbackground=colors["card"],
+            bordercolor=colors["border"],
+            lightcolor=colors["card"],
+            darkcolor=colors["card"],
         )
-        self.style.configure("TNotebook", background="#f5f5f7", borderwidth=0)
-        self.style.configure("TNotebook.Tab", padding=(22, 10))
         self.style.map(
-            "TNotebook.Tab", background=[("selected", "#f5f5f7"), ("!selected", "#e5e8ee")]
+            "TEntry",
+            bordercolor=[("focus", colors["accent"])],
+            fieldbackground=[("disabled", colors["field"])],
+            foreground=[("disabled", "#9aa6b6")],
         )
-        self.style.configure("TLabelframe", background="#f5f5f7", padding=14)
-        self.style.configure("TLabelframe.Label", background="#f5f5f7", foreground="#20232b")
-        self.style.configure("Treeview", rowheight=27, background="white", fieldbackground="white")
-        self.style.configure("Treeview.Heading", background="#e9ecf2", foreground="#404653")
+        self.style.configure(
+            "TCombobox",
+            padding=(9, 7),
+            fieldbackground=colors["card"],
+            background=colors["field"],
+            bordercolor=colors["border"],
+            lightcolor=colors["card"],
+            darkcolor=colors["card"],
+            arrowcolor=colors["muted"],
+        )
         self.style.map(
-            "Treeview", background=[("selected", "#fbe3e3")], foreground=[("selected", "#20232b")]
+            "TCombobox",
+            fieldbackground=[("readonly", colors["card"])],
+            foreground=[("disabled", "#9aa6b6"), ("readonly", colors["text"])],
         )
-        self.style.configure("Horizontal.TProgressbar", background="#d92727", troughcolor="#e5e6ea")
+        self.style.configure(
+            "Primary.TButton",
+            foreground="white",
+            background=colors["accent"],
+            bordercolor=colors["accent"],
+            lightcolor=colors["accent"],
+            darkcolor=colors["accent"],
+            padding=(18, 10),
+            font=(family, 10, "bold"),
+        )
+        self.style.map(
+            "Primary.TButton",
+            background=[("disabled", "#e2e7ef"), ("active", colors["accent_hover"])],
+            foreground=[("disabled", "#95a0b1")],
+            bordercolor=[("disabled", "#e2e7ef"), ("active", colors["accent_hover"])],
+            lightcolor=[("disabled", "#e2e7ef")],
+            darkcolor=[("disabled", "#e2e7ef")],
+        )
+        self.style.configure(
+            "TNotebook",
+            background=colors["page"],
+            borderwidth=0,
+            bordercolor=colors["page"],
+            lightcolor=colors["page"],
+            darkcolor=colors["page"],
+        )
+        self.style.configure(
+            "TNotebook.Tab",
+            padding=(25, 11),
+            background=colors["page"],
+            bordercolor=colors["page"],
+            lightcolor=colors["page"],
+            darkcolor=colors["page"],
+            font=(family, 10, "bold"),
+        )
+        self.style.map(
+            "TNotebook.Tab",
+            padding=[("selected", (25, 11)), ("!selected", (25, 11))],
+            expand=[("selected", (0, 0, 0, 0))],
+            background=[("selected", colors["card"]), ("active", "#e5eaf2")],
+            foreground=[("selected", colors["accent"]), ("!selected", colors["muted"])],
+        )
+        self.style.configure(
+            "Treeview",
+            rowheight=32,
+            background=colors["card"],
+            fieldbackground=colors["card"],
+            bordercolor=colors["border"],
+            lightcolor=colors["border"],
+            darkcolor=colors["border"],
+            borderwidth=1,
+        )
+        self.style.configure(
+            "Treeview.Heading",
+            background=colors["field"],
+            foreground=colors["muted"],
+            padding=(8, 9),
+            relief="flat",
+            font=(family, 9, "bold"),
+        )
+        self.style.map("Treeview.Heading", background=[("active", colors["field"])])
+        self.style.map(
+            "Treeview",
+            background=[("selected", "#ffedf0")],
+            foreground=[("selected", colors["text"])],
+        )
+        self.style.configure(
+            "Horizontal.TProgressbar",
+            background=colors["accent"],
+            troughcolor="#e8ecf3",
+            bordercolor="#e8ecf3",
+            lightcolor=colors["accent"],
+            darkcolor=colors["accent"],
+            borderwidth=0,
+            thickness=7,
+        )
+        self.style.configure(
+            "Vertical.TScrollbar",
+            background="#ccd4e0",
+            troughcolor=colors["page"],
+            bordercolor=colors["page"],
+            lightcolor=colors["page"],
+            darkcolor=colors["page"],
+            arrowcolor=colors["muted"],
+            arrowsize=11,
+            width=12,
+        )
 
     def _layout(self):
-        outer = ttk.Frame(self.root, padding=22)
+        outer = ttk.Frame(self.root, padding=22, style="Page.TFrame")
         outer.pack(fill="both", expand=True)
         outer.columnconfigure(0, weight=1)
         outer.rowconfigure(2, weight=1)
-        ttk.Label(outer, text="F1 TV Downloader", style="Title.TLabel").grid(
-            row=0, column=0, sticky="w"
+        header = ttk.Frame(outer, style="Hero.TFrame", padding=(22, 20))
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 18))
+        header.columnconfigure(1, weight=1)
+        mark = tk.Canvas(
+            header, width=42, height=42, background=COLORS["hero"], highlightthickness=0
+        )
+        mark.grid(row=0, column=0, rowspan=2, padx=(0, 16))
+        mark.create_polygon(0, 6, 42, 6, 32, 16, 0, 16, fill=COLORS["accent"], outline="")
+        mark.create_polygon(0, 21, 27, 21, 17, 31, 0, 31, fill=COLORS["accent"], outline="")
+        mark.create_polygon(0, 36, 12, 36, 6, 42, 0, 42, fill=COLORS["accent"], outline="")
+        ttk.Label(header, text="F1 TV Downloader", style="Title.TLabel").grid(
+            row=0, column=1, sticky="w"
         )
         ttk.Label(
-            outer, text="Choose an F1 TV feed and save it to your computer.", style="Muted.TLabel"
-        ).grid(row=1, column=0, sticky="w", pady=(4, 16))
+            header, text="Choose feeds, set quality, and save your race.", style="Subtitle.TLabel"
+        ).grid(row=1, column=1, sticky="w", pady=(5, 0))
+        self.session_badge = ttk.Label(header, text="Signed out", style="SignedOut.TLabel")
+        self.session_badge.grid(row=0, column=2, rowspan=2, sticky="e", padx=(20, 0))
         self.tabs = ttk.Notebook(outer)
         self.tabs.grid(row=2, column=0, sticky="nsew")
-        self.download_tab = ttk.Frame(self.tabs)
-        self.account_tab = ttk.Frame(self.tabs)
-        self.settings_tab = ttk.Frame(self.tabs)
+        self.download_tab = ttk.Frame(self.tabs, style="Page.TFrame")
+        self.account_tab = ttk.Frame(self.tabs, style="Page.TFrame")
+        self.settings_tab = ttk.Frame(self.tabs, style="Page.TFrame")
         self.tabs.add(self.download_tab, text="Download")
         self.tabs.add(self.account_tab, text="Account")
         self.tabs.add(self.settings_tab, text="Settings")
         self._download_panel()
         self._account_panel()
         self._settings_panel()
-        footer = ttk.Frame(outer)
+        footer = ttk.Frame(outer, style="Card.TFrame", padding=(16, 12))
         footer.grid(row=3, column=0, sticky="ew", pady=(12, 0))
         footer.columnconfigure(0, weight=1)
-        status_label = ttk.Label(footer, textvariable=self.status, wraplength=640)
-        status_label.grid(row=0, column=0, sticky="ew")
+        self.footer_status = ttk.Label(footer, textvariable=self.status, wraplength=640)
+        self.footer_status.grid(row=0, column=0, sticky="ew")
+        self.download_button = ttk.Button(
+            footer, text="Download video", style="Primary.TButton", command=self.start_download
+        )
+        self.download_button.grid(row=0, column=1, sticky="e", padx=(12, 0))
         self.cancel_button = ttk.Button(
             footer, text="Cancel", command=self.cancel, state="disabled"
         )
-        self.cancel_button.grid(row=0, column=1, sticky="e", padx=(12, 0))
-        footer.bind(
-            "<Configure>",
-            lambda event: status_label.configure(
-                wraplength=max(200, event.width - self.cancel_button.winfo_reqwidth() - 16)
-            ),
-        )
+        self.cancel_button.grid(row=0, column=2, sticky="e", padx=(12, 0))
+        footer.bind("<Configure>", self._footer_wrap)
+        self.tabs.bind("<<NotebookTabChanged>>", self._tab_changed)
         for event in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
             self.root.bind_all(event, self._scroll_page, add="+")
 
+    def _tab_changed(self, event=None):
+        if self.tabs.select() == str(self.download_tab):
+            self.download_button.grid()
+        else:
+            self.download_button.grid_remove()
+        self._footer_wrap()
+
+    def _footer_wrap(self, event=None):
+        width = self.footer_status.master.winfo_width()
+        buttons = self.cancel_button.winfo_reqwidth()
+        if self.download_button.winfo_manager():
+            buttons += self.download_button.winfo_reqwidth() + 12
+        self.footer_status.configure(wraplength=max(180, width - buttons - 48))
+
     def _scrollable_body(self, page, padding):
-        canvas = tk.Canvas(page, highlightthickness=0, background="#f5f5f7", yscrollincrement=22)
+        canvas = tk.Canvas(
+            page, highlightthickness=0, background=COLORS["page"], yscrollincrement=22
+        )
         scrollbar = ttk.Scrollbar(page, orient="vertical", command=canvas.yview)
         scrollbar.pack(side="right", fill="y")
         canvas.pack(side="left", fill="both", expand=True)
         canvas.configure(yscrollcommand=scrollbar.set)
-        body = ttk.Frame(canvas, padding=padding)
+        body = ttk.Frame(canvas, padding=padding, style="Page.TFrame")
         window = canvas.create_window((0, 0), window=body, anchor="nw")
         body.bind("<Configure>", lambda event: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
         self.page_canvases[str(page)] = canvas
         return body
+
+    def _card(self, parent, title, step=None):
+        card = ttk.Frame(parent, style="Card.TFrame", padding=(18, 16))
+        card.pack(fill="x", pady=(0, 14))
+        heading = ttk.Frame(card)
+        heading.pack(fill="x", pady=(0, 14))
+        if step is not None:
+            ttk.Label(heading, text=step, style="Step.TLabel").pack(side="left", padx=(0, 10))
+        ttk.Label(heading, text=title, style="Section.TLabel").pack(side="left")
+        return card, heading
 
     def _scroll_page(self, event):
         if event.widget.winfo_class() in {"Treeview", "TCombobox", "Text", "Listbox"}:
@@ -251,25 +469,27 @@ class DownloaderApp:
 
     def _download_panel(self):
         panel = self._scrollable_body(self.download_tab, 16)
-        ttk.Label(panel, text="1. Choose a video", style="Section.TLabel").pack(anchor="w")
-        row = ttk.Frame(panel)
+        video, _ = self._card(panel, "Video & feeds", "01")
+        row = ttk.Frame(video)
         row.pack(fill="x", pady=(8, 6))
         self.url_entry = ttk.Entry(row, textvariable=self.url)
         self.url_entry.pack(side="left", fill="x", expand=True)
         self.url_entry.bind("<Return>", lambda event: self.load_video())
         ttk.Button(row, text="Paste", command=self.paste_url).pack(side="left", padx=6)
-        self.load_button = ttk.Button(row, text="Load video", command=self.load_video)
-        self.load_button.pack(side="left")
-        ttk.Label(panel, textvariable=self.video_title, wraplength=800).pack(
-            anchor="w", pady=(4, 8)
+        self.load_button = ttk.Button(
+            row, text="Load video", command=self.load_video, style="Primary.TButton"
         )
-        tree_row = ttk.Frame(panel)
+        self.load_button.pack(side="left")
+        ttk.Label(video, textvariable=self.video_title, wraplength=800, style="Video.TLabel").pack(
+            anchor="w", pady=(10, 12)
+        )
+        tree_row = ttk.Frame(video)
         tree_row.pack(fill="x")
         self.feed_check_images = {}
         for checked in (False, True):
             for disabled in (False, True):
                 icon = tk.PhotoImage(master=self.root, width=18, height=18)
-                border = "#b8bbc2" if disabled else "#d92727" if checked else "#858a97"
+                border = "#b8c1cf" if disabled else COLORS["accent"] if checked else "#95a2b6"
                 icon.put(border, to=(2, 2, 16, 16))
                 icon.put(border if checked else "#ffffff", to=(3, 3, 15, 15))
                 if checked:
@@ -288,7 +508,7 @@ class DownloaderApp:
         for column, title, width in (
             ("feed", "Feed", 230),
             ("driver", "Driver", 370),
-            ("number", "Number", 90),
+            ("number", "No.", 90),
             ("status", "Status", 120),
         ):
             self.feeds.heading(column, text=title)
@@ -300,28 +520,34 @@ class DownloaderApp:
         self.feeds.bind("<<TreeviewSelect>>", self._feed_changed)
         self.feeds.bind("<Button-1>", self._feed_clicked)
         self.feeds.bind("<space>", self._feed_space)
-        selection_row = ttk.Frame(panel)
-        selection_row.pack(fill="x", pady=(8, 0))
-        ttk.Button(selection_row, text="Select all", command=self.select_all_feeds).pack(
-            side="left"
+        self.feeds.tag_configure("alternate", background="#f8fafd")
+        selection_row = ttk.Frame(video)
+        selection_row.pack(fill="x", pady=(12, 0))
+        ttk.Button(
+            selection_row, text="Select all", command=self.select_all_feeds, style="Compact.TButton"
+        ).pack(side="left")
+        ttk.Button(
+            selection_row, text="Clear", command=self.clear_feeds, style="Compact.TButton"
+        ).pack(side="left", padx=8)
+        ttk.Label(selection_row, textvariable=self.selection_text, style="Count.TLabel").pack(
+            side="right"
         )
-        ttk.Button(selection_row, text="Clear", command=self.clear_feeds).pack(side="left", padx=8)
-        ttk.Label(selection_row, textvariable=self.selection_text).pack(side="left", padx=8)
         ttk.Label(
-            panel,
-            text="Check the feeds you want to download. Press Space to toggle the focused feed. "
-            "Each feed is saved as a separate file.",
+            video,
+            text="One file per feed. Click a checkbox or press Space to select.",
             style="Muted.TLabel",
             wraplength=750,
-        ).pack(anchor="w", pady=(4, 0))
-        actions = ttk.Frame(panel)
-        actions.pack(fill="x", pady=(16, 8))
-        ttk.Label(actions, text="2. Quality and audio", style="Section.TLabel").pack(side="left")
-        self.link_button = ttk.Button(actions, text="Copy playback link", command=self.copy_link)
+        ).pack(anchor="w", pady=(8, 0))
+        quality, actions = self._card(panel, "Quality & audio", "02")
+        self.link_button = ttk.Button(
+            actions, text="Copy playback link", command=self.copy_link, style="Compact.TButton"
+        )
         self.link_button.pack(side="right")
-        self.inspect_button = ttk.Button(actions, text="Check streams", command=self.inspect)
+        self.inspect_button = ttk.Button(
+            actions, text="Check streams", command=self.inspect, style="Compact.TButton"
+        )
         self.inspect_button.pack(side="right", padx=8)
-        options = ttk.Frame(panel)
+        options = ttk.Frame(quality)
         options.pack(fill="x")
         options.columnconfigure((0, 1, 2), weight=1)
         ttk.Label(options, text="Video quality").grid(row=0, column=0, sticky="w")
@@ -343,17 +569,15 @@ class DownloaderApp:
             width=23,
         )
         self.extra_combo.grid(row=1, column=2, sticky="ew", pady=5)
-        ttk.Label(panel, text="3. Save your video", style="Section.TLabel").pack(
-            anchor="w", pady=(14, 0)
-        )
-        folder = ttk.Frame(panel)
+        save, _ = self._card(panel, "Save your video", "03")
+        folder = ttk.Frame(save)
         folder.pack(fill="x", pady=8)
         ttk.Entry(folder, textvariable=self.directory).pack(side="left", fill="x", expand=True)
         ttk.Button(folder, text="Choose folder...", command=self.choose_folder).pack(
             side="left", padx=(8, 0)
         )
-        file_row = ttk.Frame(panel)
-        file_row.pack(fill="x")
+        file_row = ttk.Frame(save)
+        file_row.pack(fill="x", pady=(8, 0))
         ttk.Label(file_row, text="Format").pack(side="left", padx=(0, 10))
         for value in ("mp4", "ts"):
             ttk.Radiobutton(file_row, text=value.upper(), value=value, variable=self.format).pack(
@@ -362,34 +586,34 @@ class DownloaderApp:
         ttk.Checkbutton(file_row, text="Replace existing file", variable=self.overwrite).pack(
             side="left", padx=10
         )
-        self.download_button = ttk.Button(
-            file_row, text="Download video", style="Primary.TButton", command=self.start_download
-        )
-        self.download_button.pack(side="right")
-        self.progress = ttk.Progressbar(panel, mode="determinate", maximum=100)
-        self.progress.pack(fill="x", pady=(14, 6))
-        progress_row = ttk.Frame(panel)
+        self.progress = ttk.Progressbar(save, mode="determinate", maximum=100)
+        self.progress.pack(fill="x", pady=(18, 10))
+        progress_row = ttk.Frame(save)
         progress_row.pack(fill="x")
         ttk.Label(progress_row, textvariable=self.progress_text, style="Muted.TLabel").pack(
             side="left"
         )
-        self.open_button = ttk.Button(progress_row, text="Open folder", command=self.open_folder)
+        self.open_button = ttk.Button(
+            progress_row, text="Open folder", command=self.open_folder, style="Compact.TButton"
+        )
         self.open_button.pack(side="right")
         self.log = tk.Text(
-            panel,
+            save,
             height=2,
             wrap="word",
             state="disabled",
-            background="#f5f5f7",
-            foreground="#646975",
+            background=COLORS["field"],
+            foreground=COLORS["muted"],
             relief="flat",
             font="TkSmallCaptionFont",
+            padx=10,
+            pady=8,
         )
         self.log.pack(fill="both", expand=True, pady=(8, 0))
 
     def _account_panel(self):
-        panel = self._scrollable_body(self.account_tab, 24)
-        ttk.Label(panel, text="Sign in to F1 TV", style="Section.TLabel").pack(anchor="w")
+        page = self._scrollable_body(self.account_tab, 16)
+        panel, _ = self._card(page, "Your F1 TV account")
         ttk.Label(panel, textvariable=self.account_status, style="Muted.TLabel").pack(
             anchor="w", pady=(8, 22)
         )
@@ -420,11 +644,11 @@ class DownloaderApp:
         self.remember_check.pack(anchor="w", pady=(16, 12))
         ttk.Label(
             panel,
-            text="Browser sign-in opens the official F1 sign-in page in Chrome/Chromium. "
-            "Complete any verification there.\nEmail and password are optional "
-            "when using the browser. The browser closes when authorization is received. "
+            text="Browser sign-in opens Chrome/Chromium. Complete verification there; "
+            "the window closes when authorization is received. "
+            "Email and password are optional for browser sign-in. "
             "Passwords are never saved.",
-            wraplength=750,
+            wraplength=650,
             style="Muted.TLabel",
         ).pack(anchor="w", pady=(0, 20))
         buttons = ttk.Frame(panel)
@@ -435,24 +659,21 @@ class DownloaderApp:
         self.signin_button.pack(side="left")
         self.signout_button = ttk.Button(buttons, text="Sign out", command=self.sign_out)
         self.signout_button.pack(side="left", padx=10)
-        ttk.Separator(panel).pack(fill="x", pady=28)
-        ttk.Label(panel, text="First time using browser sign-in?", style="Section.TLabel").pack(
-            anchor="w"
-        )
+        setup, _ = self._card(page, "Browser setup")
         ttk.Label(
-            panel,
+            setup,
             text="Install the sign-in browser once. "
             "This requires internet access and may take a few minutes.",
             wraplength=750,
             style="Muted.TLabel",
         ).pack(anchor="w", pady=10)
-        ttk.Button(panel, text="Install browser support", command=self.install_browser).pack(
+        ttk.Button(setup, text="Install browser support", command=self.install_browser).pack(
             anchor="w"
         )
 
     def _settings_panel(self):
-        panel = self._scrollable_body(self.settings_tab, 24)
-        ttk.Label(panel, text="Download settings", style="Section.TLabel").pack(anchor="w")
+        page = self._scrollable_body(self.settings_tab, 16)
+        panel, _ = self._card(page, "Download settings")
         ttk.Label(
             panel,
             text="These settings are optional. The defaults work for most downloads.",
@@ -485,17 +706,16 @@ class DownloaderApp:
         ttk.Button(panel, text="Apply connection settings", command=self.apply_settings).pack(
             anchor="w"
         )
-        ttk.Separator(panel).pack(fill="x", pady=22)
-        ttk.Label(panel, text="Media tools", style="Section.TLabel").pack(anchor="w")
-        ttk.Label(panel, textvariable=self.tool_status, wraplength=750, style="Muted.TLabel").pack(
+        tools, _ = self._card(page, "Media tools")
+        ttk.Label(tools, textvariable=self.tool_status, wraplength=750, style="Muted.TLabel").pack(
             anchor="w", pady=10
         )
-        ttk.Button(panel, text="Check again", command=self.check_tools).pack(anchor="w")
+        ttk.Button(tools, text="Check again", command=self.check_tools).pack(anchor="w")
         ttk.Label(
-            panel,
+            page,
             text=f"F1 TV Downloader {__version__} | Runs locally on your computer",
-            style="Muted.TLabel",
-        ).pack(anchor="w", pady=(20, 0))
+            style="PageMuted.TLabel",
+        ).pack(anchor="w", pady=(4, 0))
         self.check_tools()
 
     def check_tools(self):
@@ -521,6 +741,10 @@ class DownloaderApp:
             return
         self._sync_feed_checks()
         signed_in = self.service.signed_in
+        self.session_badge.configure(
+            text="Signed in" if signed_in else "Signed out",
+            style="SignedIn.TLabel" if signed_in else "SignedOut.TLabel",
+        )
         self.account_status.set(
             "A session is ready. You can choose a video and download."
             if signed_in
@@ -538,6 +762,7 @@ class DownloaderApp:
             button.state(["!disabled"] if ready and count == 1 else ["disabled"])
         self.open_button.state(["!disabled"] if self.last_output else ["disabled"])
         self._account_fields()
+        self._footer_wrap()
 
     def _walk_controls(self, widget):
         for child in widget.winfo_children():
@@ -689,6 +914,7 @@ class DownloaderApp:
                 "",
                 "end",
                 iid=str(index),
+                tags=("alternate",) if index % 2 else (),
                 values=(
                     display_text(channel.title),
                     display_text(channel.driver_name),
