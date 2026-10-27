@@ -4,6 +4,7 @@ import os
 import unittest
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs
 from urllib.request import Request
 
 from test_models import FIXTURE, URL
@@ -15,6 +16,27 @@ from f1tv_dl.http import HttpClient, SafeRedirectHandler, validate_media_url
 
 
 class HTTPTests(unittest.TestCase):
+    def test_oauth_form_is_urlencoded_and_post_failures_are_not_retried(self):
+        client = HttpClient()
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=None)
+        response.read.return_value = b'{"ok": true}'
+        client.opener = Mock()
+        client.opener.open.return_value = response
+        form = {"code": "private+code/with=padding", "code_verifier": "private-verifier"}
+        self.assertTrue(client.get_json(URL, form=form)["ok"])
+        request = client.opener.open.call_args.args[0]
+        self.assertEqual(request.get_method(), "POST")
+        self.assertEqual(request.get_header("Content-type"), "application/x-www-form-urlencoded")
+        self.assertEqual(parse_qs(request.data.decode()), {k: [v] for k, v in form.items()})
+        client.opener.open.reset_mock()
+        client.opener.open.side_effect = HTTPError(URL, 503, "failure", {}, None)
+        with self.assertRaises(APIError) as caught:
+            client.get_json(URL, form=form)
+        self.assertEqual(client.opener.open.call_count, 1)
+        self.assertNotIn("private", str(caught.exception))
+
     def test_temporary_get_errors_are_retried(self):
         client = HttpClient()
         response = Mock()

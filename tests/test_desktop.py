@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 from test_models import FIXTURE, URL
 
+from f1tv_dl.auth import SessionCredentials
 from f1tv_dl.desktop import DesktopService, DownloadOptions, install_browser_support
 from f1tv_dl.errors import AuthenticationError, F1TVError, OperationCancelled
 from f1tv_dl.models import Content, ContentRef
@@ -80,6 +81,18 @@ class DesktopServiceTests(unittest.TestCase):
             cancel=cancel,
             status=None,
         )
+
+    def test_native_browser_credentials_survive_desktop_restart_and_sign_out(self):
+        credentials = SessionCredentials("web-entitlement", "web-subscription")
+        self.service.auth.browser_login.return_value = credentials
+        self.service.sign_in("browser")
+        self.assertTrue(self.service.signed_in)
+        other = DesktopService(session_path=self.path)
+        self.assertEqual(other.sessions.get(), "web-entitlement")
+        self.assertEqual(other.sessions.subscription_token, "web-subscription")
+        other.sign_out()
+        self.assertFalse(other.signed_in)
+        self.assertFalse(self.path.exists())
 
     def test_cancelled_sign_in_does_not_change_session_or_submit_password(self):
         cancel = threading.Event()

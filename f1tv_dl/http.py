@@ -53,16 +53,21 @@ class HttpClient:
         self.retries = retries
         self.opener = build_opener(SafeRedirectHandler())
 
-    def request(self, url, *, params=None, headers=None, body=None, operation="Request"):
+    def request(self, url, *, params=None, headers=None, body=None, form=None, operation="Request"):
         validate_media_url(url)
         if params:
             url += ("&" if "?" in url else "?") + urlencode(params)
         request_headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
         request_headers.update(headers or {})
         data = None
+        if body is not None and form is not None:
+            raise ValueError("Provide a JSON body or a form, not both.")
         if body is not None:
             data = json.dumps(body).encode("utf-8")
             request_headers["Content-Type"] = "application/json"
+        elif form is not None:
+            data = urlencode(form).encode("utf-8")
+            request_headers["Content-Type"] = "application/x-www-form-urlencoded"
         request = Request(url, data=data, headers=request_headers)
         for attempt in range(self.retries + 1):
             try:

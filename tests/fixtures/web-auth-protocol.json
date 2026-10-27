@@ -1,0 +1,28 @@
+{
+  "source": "Public protocol fields from the user-provided successful Firefox recording; secrets omitted.",
+  "authorization": {
+    "client_id": "df7c78a7-b07c-4ec9-9e0e-9da2149e939f",
+    "redirect_uri": "https://account.formula1.com/#//login/",
+    "response_type": "code",
+    "scope": "openid profile f1tv_groups email address",
+    "code_challenge_method": "S256",
+    "acr_values": "df7178db6ded1b80e7c4a604cb5a122b",
+    "journey": "login",
+    "ch": "ACWB",
+    "language": "en"
+  },
+  "token_form_fields": [
+    "grant_type",
+    "client_id",
+    "redirect_uri",
+    "code",
+    "code_verifier"
+  ],
+  "entitlement_path": "/2.0/R/ENG/WEB_DASH/ALL/USER/ENTITLEMENT",
+  "playback_path": "/3.0/R/ENG/WEB_HLS/ALL/CONTENT/PLAY",
+  "playback_player": "player_tm",
+  "playback_auth_headers": [
+    "ascendontoken",
+    "entitlementtoken"
+  ]
+}

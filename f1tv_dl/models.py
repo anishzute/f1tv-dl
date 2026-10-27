@@ -43,6 +43,7 @@ class Channel:
     driver_name: str = ""
     racing_number: str = ""
     default: bool = False
+    web_channel_id: str | None = None
 
     @classmethod
     def from_dict(cls, data):
@@ -62,6 +63,9 @@ class Channel:
             driver_name=driver,
             racing_number=str(data.get("racingNumber", "")) if driver else "",
             default=data.get("default") is True,
+            web_channel_id=(
+                str(data["channelId"]) if data.get("channelId") is not None else channel_id
+            ),
         )
 
     def aliases(self):

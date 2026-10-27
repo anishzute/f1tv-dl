@@ -36,13 +36,11 @@ A desktop display and FFmpeg are required; the CLI Docker image stays headless.
 
 1. On **Account**, select **Browser sign-in**, **Email and password**, or **Session token**.
    For browser sign-in, click **Install browser support** once, then **Sign in**.
-   The browser opens the [official F1 account login](https://account.formula1.com/#/en/login?)
-   directly. Complete any account verification in that window.
-   The app handles essential-only cookie choices and follows
-   F1's identity-provider redirect. The status bar shows each sign-in stage.
-   A stalled account loading screen is refreshed once automatically. The browser
-   closes when sign-in completes, even if the website still shows the F1 logo.
-   This also handles F1's `#//login/` callback route without changing its sign-in parameters.
+   Chrome/Chromium opens F1's identity provider directly. Complete any account
+   verification in that window. Python handles the OAuth callback and token
+   exchange; the F1 account application and its loading screen are not needed.
+   The browser closes when authorization is received. The status bar shows the
+   remaining session authorization step.
 2. On **Download**, paste your video URL and click **Load video**. Choose a feed
    from the table. Channel listing also works before signing in.
 3. Select quality and audio. **Check streams** discovers the actual resolutions
@@ -57,7 +55,7 @@ country/entitlement, cache location, and an optional installed Chromium path.
 The status and Cancel button remain visible while the tabs scroll in smaller windows.
 
 Sign-in and downloads run in background workers so the window stays responsive.
-**Remember sign-in** stores only the session token using the same protected cache
+**Remember sign-in** stores the subscription and entitlement tokens using the same protected cache
 as the CLI. Uncheck it to keep a password/browser session in memory only and clear
 any previously saved session. Pasted session tokens are never saved. **Sign out**
 removes the saved session. Passwords and pasted tokens are cleared from their
@@ -101,15 +99,23 @@ python -m playwright install chromium
 f1tv-dl URL --login-method browser
 ```
 
-Browser sign-in opens the F1 account login directly, without waiting for the F1 TV
-homepage to load. Complete sign-in in the browser window within three minutes.
-Available credentials are filled automatically; browser verification remains interactive.
-The app detects sessions from F1's completed token exchange, account cookies, and
-account storage. It refreshes a stalled account loading screen once after 15 seconds;
-password and verification screens are preserved. A display is
+Browser sign-in uses F1's public OAuth client, service discovery, and S256 PKCE.
+Python creates fresh state and a private verifier for each attempt, opens the F1
+identity provider directly in Chromium, validates the callback state, and exchanges
+the one-time code itself. The callback is handled locally; the account website's
+JavaScript, cookies, and refresh behavior are not involved.
+Complete sign-in within three minutes. Available credentials are filled automatically;
+account verification remains interactive. A rejected password is not automatically
+resubmitted. A display is
 required unless `--headless` is selected. Use `--browser-executable PATH` for an
 installed Chromium browser. The default Docker image contains the core client and
 FFmpeg, without a browser.
+
+New browser sessions use the website's `WEB_DASH` entitlement endpoint and
+`WEB_HLS` playback API with both required tokens. The requested feed is selected
+from the returned playback feeds. Legacy entitlement-only sessions remain readable.
+Resolution choices come from the authorized manifest; using Chromium for sign-in
+alone does not guarantee 4K playback or downloads.
 
 Alternatively, set `F1TV_TOKEN` to the `entitlement_token` cookie from your signed-in
 F1 TV session. This is the entitlement token, not the subscription token inside
@@ -119,7 +125,7 @@ saved to disk or silently replaced with another login.
 Password login exchanges the subscription token for an entitlement token. Sessions
 are cached atomically at `$XDG_CACHE_HOME/f1tv-dl/session.json`, defaulting to
 `~/.cache/f1tv-dl/session.json`, or `%LOCALAPPDATA%\f1tv-dl\session.json` on Windows.
-The cache stores a bearer token in JSON, with owner-only file permissions on POSIX.
+The cache stores bearer tokens in JSON, with owner-only file permissions on POSIX.
 Protect the directory with your account ACLs on Windows. Use `--session-file PATH`
 to choose a location or `--no-cache` to disable cache reads and writes. The old
 `.f1tv.json` cache is not imported; sign in once after migrating.
@@ -232,5 +238,8 @@ folder selection, error recovery, and sign-out. Media integration tests also che
 the desktop service against real locally generated streams and FFmpeg progress.
 Browser-flow tests use real Chromium with intercepted fixture pages and no live
 account credentials. Install the `browser` extra and run `playwright install chromium`
-to enable them. They cover consecutive consent frames, F1's identity provider,
-popups, safe credential entry, and session-cookie completion after redirects.
+to enable them. They cover direct identity-provider authorization,
+query and fragment callbacks, popups, safe credential entry, state rejection, and
+PKCE code exchange without loading the account application. Public protocol fields
+from the supplied Firefox recording are retained in a sanitized fixture; the HAR,
+recorded credentials, tokens, and signed media URLs are excluded.

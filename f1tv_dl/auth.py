@@ -6,12 +6,20 @@ import logging
 import os
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
+from . import __version__
 from .config import API_KEY, BASE_URL, DISTRIBUTION_CHANNEL, LOGIN_URL
 from .errors import APIError, AuthenticationError, F1TVError
 
 LOG = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, repr=False)
+class SessionCredentials:
+    entitlement_token: str
+    subscription_token: str
 
 
 def token_is_fresh(token: str) -> bool:
@@ -31,16 +39,26 @@ class SessionStore:
     def __init__(self, path: Path | None):
         self.path = path
 
-    def load(self) -> str | None:
+    def load(self) -> str | SessionCredentials | None:
         if self.path is None:
             return None
         try:
-            token = json.loads(self.path.read_text(encoding="utf-8"))["token"]
-            return token if token_is_fresh(token) else None
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            token = data["token"]
+            if not token_is_fresh(token):
+                return None
+            subscription = data.get("subscription_token")
+            if subscription is not None:
+                return (
+                    SessionCredentials(token, subscription)
+                    if token_is_fresh(subscription)
+                    else None
+                )
+            return token
         except (OSError, ValueError, TypeError, KeyError):
             return None
 
-    def save(self, token: str):
+    def save(self, token: str | SessionCredentials):
         if self.path is None:
             return
         temporary = None
@@ -48,7 +66,16 @@ class SessionStore:
             self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             fd, temporary = tempfile.mkstemp(prefix=".session-", dir=self.path.parent)
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump({"version": 1, "token": token}, handle)
+                data = (
+                    {
+                        "version": 2,
+                        "token": token.entitlement_token,
+                        "subscription_token": token.subscription_token,
+                    }
+                    if isinstance(token, SessionCredentials)
+                    else {"version": 1, "token": token}
+                )
+                json.dump(data, handle)
                 handle.write("\n")
                 handle.flush()
                 os.fsync(handle.fileno())
@@ -69,10 +96,13 @@ class Authenticator:
     def __init__(self, http):
         self.http = http
 
-    def exchange_subscription_token(self, token: str) -> str:
+    def exchange_subscription_token(self, token: str, *, platform="BIG_SCREEN_HLS") -> str:
+        headers = {"ascendontoken": token}
+        if platform == "WEB_DASH":
+            headers["User-Agent"] = "f1tv-dl/" + __version__
         payload = self.http.get_json(
-            BASE_URL + "/2.0/R/ENG/BIG_SCREEN_HLS/ALL/USER/ENTITLEMENT",
-            headers={"ascendontoken": token},
+            BASE_URL + f"/2.0/R/ENG/{platform}/ALL/USER/ENTITLEMENT",
+            headers=headers,
             operation="Entitlement lookup",
         )
         result = payload.get("resultObj")
@@ -122,9 +152,10 @@ class Authenticator:
         from .browser import browser_login
 
         return browser_login(
-            self.exchange_subscription_token,
+            lambda token: self.exchange_subscription_token(token, platform="WEB_DASH"),
             username,
             password,
+            http=self.http,
             headless=headless,
             executable=executable,
             cancel=cancel,
@@ -134,12 +165,23 @@ class Authenticator:
 
 
 class SessionManager:
-    def __init__(self, store, login, token: str | None = None):
+    def __init__(self, store, login, token: str | SessionCredentials | None = None):
         self.store = store
         self.login = login
         self.explicit = token is not None
-        self.token = token if self.explicit else store.load()
-        if self.explicit and not token_is_fresh(token):
+        credentials = token if self.explicit else store.load()
+        self.token = (
+            credentials.entitlement_token
+            if isinstance(credentials, SessionCredentials)
+            else credentials
+        )
+        self.subscription_token = (
+            credentials.subscription_token if isinstance(credentials, SessionCredentials) else None
+        )
+        if self.explicit and (
+            not token_is_fresh(self.token)
+            or (self.subscription_token is not None and not token_is_fresh(self.subscription_token))
+        ):
             raise AuthenticationError(
                 "F1TV_TOKEN is empty, malformed, or expired. Provide a fresh token."
             )
@@ -154,9 +196,20 @@ class SessionManager:
             raise AuthenticationError(
                 "F1 TV rejected F1TV_TOKEN. Provide a fresh entitlement token from your session."
             )
-        token = self.login()
-        if not token_is_fresh(token):
+        credentials = self.login()
+        token = (
+            credentials.entitlement_token
+            if isinstance(credentials, SessionCredentials)
+            else credentials
+        )
+        subscription = (
+            credentials.subscription_token if isinstance(credentials, SessionCredentials) else None
+        )
+        if not token_is_fresh(token) or (
+            subscription is not None and not token_is_fresh(subscription)
+        ):
             raise F1TVError("Login returned an invalid or expired session token.")
         self.token = token
-        self.store.save(token)
+        self.subscription_token = subscription
+        self.store.save(credentials)
         return token

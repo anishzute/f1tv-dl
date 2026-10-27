@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch
 
 from test_models import FIXTURE, URL
 
+from f1tv_dl.auth import SessionCredentials
 from f1tv_dl.desktop import DesktopService, VideoInfo
 from f1tv_dl.errors import AuthenticationError, OperationCancelled
 from f1tv_dl.gui import DownloaderApp, tk
@@ -108,6 +109,22 @@ class DesktopInteractionTests(unittest.TestCase):
         self.wait_idle()
         self.assertFalse(self.service.signed_in)
         self.assertTrue(self.app.download_button.instate(["disabled"]))
+        self.showerror.assert_not_called()
+
+    def test_browser_button_accepts_and_remembers_the_native_oauth_session(self):
+        credentials = SessionCredentials("browser-entitlement", "browser-subscription")
+        self.service.auth.browser_login.return_value = credentials
+        self.app.method.set("Browser sign-in")
+        self.app._account_fields()
+        self.app.email.set("fixture@example.test")
+        self.app.password.set("private-browser-password")
+        self.app.signin_button.invoke()
+        self.wait_idle()
+        self.assertTrue(self.service.signed_in)
+        self.assertEqual(self.service.store.load(), credentials)
+        self.assertEqual(self.app.tabs.select(), str(self.app.download_tab))
+        self.assertEqual(self.app.password.get(), "")
+        self.assertNotIn("private-browser-password", self.app.log.get("1.0", "end"))
         self.showerror.assert_not_called()
 
     def test_cancel_keeps_the_window_responsive(self):

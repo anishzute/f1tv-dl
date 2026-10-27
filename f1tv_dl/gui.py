@@ -372,9 +372,10 @@ class DownloaderApp:
         self.remember_check.pack(anchor="w", pady=(16, 12))
         ttk.Label(
             panel,
-            text="Browser sign-in opens the official F1 TV website. "
+            text="Browser sign-in opens the official F1 sign-in page in Chrome/Chromium. "
             "Complete any verification there.\nEmail and password are optional "
-            "when using the browser. Passwords are never saved.",
+            "when using the browser. The browser closes when authorization is received. "
+            "Passwords are never saved.",
             wraplength=750,
             style="Muted.TLabel",
         ).pack(anchor="w", pady=(0, 20))
