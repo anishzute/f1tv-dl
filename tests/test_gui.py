@@ -1,6 +1,7 @@
 """Desktop interaction tests; run under xvfb-run on a headless Linux machine."""
 
 import gc
+import json
 import os
 import tempfile
 import threading
@@ -14,6 +15,7 @@ from test_models import FIXTURE, URL
 
 from f1tv_dl.auth import SessionCredentials
 from f1tv_dl.desktop import DesktopService, VideoInfo
+from f1tv_dl.diagnostics import ManifestReport, ProfileReport
 from f1tv_dl.errors import APIError, AuthenticationError, OperationCancelled
 from f1tv_dl.gui import DownloaderApp, tk
 from f1tv_dl.media import DownloadProgress
@@ -332,6 +334,61 @@ class DesktopInteractionTests(unittest.TestCase):
         self.wait_idle()
         self.assertIn("1920x1080", self.app.quality_combo["values"])
         self.assertEqual(self.app.audio.get(), "Dutch")
+
+    def test_manifest_report_can_be_viewed_copied_and_saved_after_access_failure(self):
+        self.assertTrue(self.app.manifest_button.instate(["disabled"]))
+        self.login()
+        self.load()
+        report = ManifestReport(
+            "1000010409",
+            "F1 LIVE",
+            [
+                ProfileReport(
+                    "web", "Web", http_status=451, error="Playback authorization failed (HTTP 451)."
+                ),
+            ],
+        )
+        self.service.check_manifest = Mock(return_value=report)
+        self.app.manifest_button.invoke()
+        self.wait_idle()
+        self.assertTrue(self.app.manifest_window.winfo_viewable())
+        self.assertIn("HTTP 451", self.app.manifest_text.get("1.0", "end"))
+        self.assertIn("No manifest could be inspected", self.app.status.get())
+        self.assertEqual(self.service.check_manifest.call_args.args[1], "F1 LIVE")
+        self.app.copy_report_button.invoke()
+        self.assertEqual(json.loads(self.root.clipboard_get())["profiles"][0]["http_status"], 451)
+        output = self.folder / "report.json"
+        with patch("f1tv_dl.gui.filedialog.asksaveasfilename", return_value=str(output)):
+            self.app.save_report_button.invoke()
+        self.assertEqual(json.loads(output.read_text())["feed"], "F1 LIVE")
+        self.showerror.assert_not_called()
+
+    def test_manifest_check_requires_one_feed_and_cancellation_reaches_worker(self):
+        self.login()
+        self.load()
+        self.app.select_all_feeds()
+        self.assertTrue(self.app.manifest_button.instate(["disabled"]))
+        self.app.feeds.selection_set("0")
+        self.root.update()
+        started = threading.Event()
+
+        def check(content, channel, *, cancel, status):
+            status("Checking web manifest...")
+            started.set()
+            cancel.wait(3)
+            raise OperationCancelled()
+
+        self.service.check_manifest = Mock(side_effect=check)
+        self.app.manifest_button.invoke()
+        self.assertTrue(started.wait(1))
+        self.root.update()
+        self.assertTrue(self.app.manifest_button.instate(["disabled"]))
+        self.app.cancel_button.invoke()
+        self.wait_idle()
+        self.assertIn("Cancelled", self.app.status.get())
+        self.assertIsNone(self.app.manifest_window)
+        self.assertTrue(self.app.manifest_button.instate(["!disabled"]))
+        self.showerror.assert_not_called()
 
     def test_loading_another_url_invalidates_the_previous_video(self):
         self.login()

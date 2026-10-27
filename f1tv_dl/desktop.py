@@ -11,6 +11,7 @@ from pathlib import Path
 from .api import F1TVClient
 from .auth import Authenticator, SessionManager, SessionStore, token_is_fresh
 from .config import Settings, default_session_path
+from .diagnostics import check_manifests
 from .errors import AuthenticationError, F1TVError, OperationCancelled
 from .http import HttpClient
 from .media import download, probe, require_binary, stop_process
@@ -137,6 +138,16 @@ class DesktopService:
 
     def stream_url(self, content, channel=None):
         return self.client.playback(content, content.select_channel(channel), self.sessions).url
+
+    def check_manifest(self, content, channel=None, cancel=None, status=None):
+        return check_manifests(
+            self.http,
+            content,
+            content.select_channel(channel),
+            self.sessions,
+            cancel=cancel,
+            status=status,
+        )
 
     @property
     def media_user_agent(self):

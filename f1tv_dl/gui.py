@@ -88,6 +88,8 @@ class DownloaderApp:
         self.service = service or DesktopService()
         self.content = None
         self.last_output = None
+        self.manifest_report = None
+        self.manifest_window = None
         self.busy = False
         self.closing = False
         self.expected_seconds = 0
@@ -569,6 +571,21 @@ class DownloaderApp:
             width=23,
         )
         self.extra_combo.grid(row=1, column=2, sticky="ew", pady=5)
+        manifest_row = ttk.Frame(quality)
+        manifest_row.pack(fill="x", pady=(14, 0))
+        self.manifest_button = ttk.Button(
+            manifest_row,
+            text="Check manifest / 4K",
+            command=self.check_manifest,
+            style="Compact.TButton",
+        )
+        self.manifest_button.pack(side="left", padx=(0, 12))
+        ttk.Label(
+            manifest_row,
+            text="Compare resolutions and DRM for one selected feed.",
+            style="Muted.TLabel",
+            wraplength=460,
+        ).pack(side="left", fill="x", expand=True)
         save, _ = self._card(panel, "Save your video", "03")
         folder = ttk.Frame(save)
         folder.pack(fill="x", pady=8)
@@ -758,7 +775,7 @@ class DownloaderApp:
         self.download_button.configure(
             text=f"Download selected ({count})" if count > 1 else "Download video"
         )
-        for button in (self.inspect_button, self.link_button):
+        for button in (self.inspect_button, self.link_button, self.manifest_button):
             button.state(["!disabled"] if ready and count == 1 else ["disabled"])
         self.open_button.state(["!disabled"] if self.last_output else ["disabled"])
         self._account_fields()
@@ -1075,6 +1092,109 @@ class DownloaderApp:
         if available and self.audio.get() not in available:
             self.audio.set(available[0])
         self.status.set("Available quality and audio updated for the selected feed.")
+
+    def check_manifest(self):
+        if self.busy:
+            return
+        if len(self._channels()) != 1 or not self.service.signed_in:
+            self.status.set("Sign in and select one feed to check its manifest.")
+            return
+        content, channel = self.content, self._channel()
+        self._run(
+            "Checking manifests and 4K availability...",
+            lambda cancel: self.service.check_manifest(
+                content,
+                channel,
+                cancel=cancel,
+                status=lambda text: self.events.put(("status", text)),
+            ),
+            self._manifest_checked,
+        )
+
+    def _manifest_checked(self, report):
+        self.manifest_report = report
+        self.status.set(
+            "Manifest check complete. Copy or save the report to share the results."
+            if report.inspected
+            else "No manifest could be inspected. The report contains the access errors."
+        )
+        if self.manifest_window is not None:
+            self.manifest_window.destroy()
+        window = self.manifest_window = tk.Toplevel(self.root)
+        window.title("Manifest check / 4K")
+        window.geometry("800x620")
+        window.minsize(620, 400)
+        window.transient(self.root)
+        window.protocol("WM_DELETE_WINDOW", window.withdraw)
+        body = ttk.Frame(window, padding=18)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text="Manifest check", style="Section.TLabel").pack(anchor="w")
+        ttk.Label(
+            body,
+            text="Resolutions, DRM markers, and access errors. No media was downloaded.",
+            style="Muted.TLabel",
+            wraplength=700,
+        ).pack(anchor="w", pady=(8, 14))
+        row = ttk.Frame(body)
+        row.pack(fill="both", expand=True)
+        self.manifest_text = tk.Text(
+            row,
+            wrap="word",
+            font="TkTextFont",
+            padx=12,
+            pady=12,
+            background=COLORS["field"],
+            foreground=COLORS["text"],
+            relief="flat",
+        )
+        scroll = ttk.Scrollbar(row, orient="vertical", command=self.manifest_text.yview)
+        scroll.pack(side="right", fill="y")
+        self.manifest_text.pack(side="left", fill="both", expand=True)
+        self.manifest_text.configure(yscrollcommand=scroll.set)
+        self.manifest_text.insert("1.0", report.to_text())
+        self.manifest_text.configure(state="disabled")
+        actions = ttk.Frame(body)
+        actions.pack(fill="x", pady=(14, 0))
+        self.copy_report_button = ttk.Button(
+            actions,
+            text="Copy report",
+            command=self.copy_manifest_report,
+        )
+        self.copy_report_button.pack(side="left")
+        self.save_report_button = ttk.Button(
+            actions,
+            text="Save report...",
+            command=self.save_manifest_report,
+        )
+        self.save_report_button.pack(side="left", padx=8)
+        ttk.Button(actions, text="Close", command=window.withdraw).pack(side="right")
+
+    def copy_manifest_report(self):
+        if self.manifest_report is not None:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(self.manifest_report.to_json())
+            self.status.set("Manifest report copied. Tokens and playback URLs are omitted.")
+
+    def save_manifest_report(self):
+        if self.manifest_report is None:
+            return
+        path = filedialog.asksaveasfilename(
+            parent=self.manifest_window,
+            title="Save manifest report",
+            defaultextension=".json",
+            initialfile="f1tv-manifest-check.json",
+            filetypes=[("JSON report", "*.json")],
+        )
+        if path:
+            try:
+                Path(path).write_text(self.manifest_report.to_json(), encoding="utf-8")
+                self.status.set("Manifest report saved.")
+            except OSError:
+                messagebox.showerror(
+                    "Save manifest report",
+                    "Could not save the report. Choose a writable folder.",
+                    parent=self.manifest_window,
+                )
 
     def copy_link(self):
         if len(self._channels()) != 1:

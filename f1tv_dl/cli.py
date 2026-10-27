@@ -13,6 +13,7 @@ from . import __version__
 from .api import F1TVClient
 from .auth import Authenticator, SessionManager, SessionStore
 from .config import Settings, default_session_path
+from .diagnostics import check_manifests
 from .errors import AuthenticationError, F1TVError
 from .http import HttpClient
 from .media import download, probe, require_binary, select_streams
@@ -60,6 +61,14 @@ def parser():
     modes.add_argument("--channel-list", action="store_true", help="List feeds without logging in")
     modes.add_argument(
         "--stream-url", action="store_true", help="Print the authorized playback URL"
+    )
+    modes.add_argument(
+        "--check-manifest",
+        action="store_true",
+        help="Compare web/Android TV manifests for resolutions and DRM; no media download",
+    )
+    command.add_argument(
+        "--json", action="store_true", help="Output --check-manifest as a shareable JSON report"
     )
     command.add_argument(
         "-a", "--audio-stream", default="eng", help="Primary audio language (default: eng)"
@@ -137,6 +146,8 @@ def credentials(args):
 
 def run(args):
     ContentRef.parse(args.url)
+    if args.json and not args.check_manifest:
+        raise F1TVError("Use --json with --check-manifest.")
     if not re.fullmatch(r"[A-Za-z]{2,3}", args.country):
         raise F1TVError("Country must be a two- or three-letter country code.")
     if not re.fullmatch(r"[A-Za-z0-9_]+", args.entitlement):
@@ -162,7 +173,7 @@ def run(args):
     international = content.select_channel("INTERNATIONAL") if args.international_audio else None
     # Validate dependencies and destination before any credential submission.
     output = None
-    if not args.stream_url:
+    if not (args.stream_url or args.check_manifest):
         require_binary("ffmpeg")
         require_binary("ffprobe")
         suffix = "-" + safe_filename(channel.title) if args.channel and channel else ""
@@ -190,6 +201,10 @@ def run(args):
         login,
         token=args.token,
     )
+    if args.check_manifest:
+        report = check_manifests(http, content, channel, sessions)
+        print(report.to_json() if args.json else report.to_text(), end="")
+        return 0 if report.inspected else 1
     playback = client.playback(content, channel, sessions)
     if args.stream_url:
         print(playback.url)
@@ -253,8 +268,7 @@ def main(argv=None) -> int:
     level = level or getattr(logging, args.log_level.upper())
     logging.basicConfig(level=level, format="%(levelname)s: %(message)s", stream=sys.stderr)
     try:
-        run(args)
-        return 0
+        return run(args) or 0
     except (F1TVError, OSError, EOFError) as error:
         LOG.error("%s", error)
         return 1

@@ -118,6 +118,22 @@ class DesktopServiceTests(unittest.TestCase):
         self.assertEqual(info.resolutions, ("1920x1080", "640x360"))
         self.assertEqual(info.languages, ("eng", "nld"))
 
+    def test_manifest_comparison_uses_selected_feed_and_gui_session(self):
+        cancel = threading.Event()
+        status = Mock()
+        with patch("f1tv_dl.desktop.check_manifests", return_value="report") as check:
+            self.assertEqual(
+                self.service.check_manifest(self.content, "VER", cancel, status), "report"
+            )
+        check.assert_called_once_with(
+            self.service.http,
+            self.content,
+            self.content.select_channel("VER"),
+            self.service.sessions,
+            cancel=cancel,
+            status=status,
+        )
+
     def test_existing_download_fails_before_playback_authorization(self):
         output = self.root / "2026-united-states-grand-prix-VER.mp4"
         output.write_bytes(b"original")

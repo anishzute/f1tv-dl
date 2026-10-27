@@ -143,6 +143,69 @@ Legacy entitlement-only sessions remain readable.
 Resolution choices come from the authorized manifest; using Chromium for sign-in
 alone does not guarantee 4K playback or downloads.
 
+## Manifest and 4K check (WSL)
+
+Update your checkout and install the browser extra in the Python environment you
+use for the app. From the repository directory:
+
+```sh
+git pull --ff-only
+python -m pip install -e '.[browser]'
+python -m playwright install chromium
+```
+
+If Chromium reports missing Linux dependencies, run
+`python -m playwright install-deps chromium`. WSLg or an X server must be working
+for graphical browser sign-in. FFmpeg and FFprobe are **not required** for this check.
+
+Run this command in WSL, then complete sign-in in Chromium if prompted:
+
+```sh
+python -m f1tv_dl \
+  'https://f1tv.formula1.com/detail/1000010409/2026-united-states-grand-prix' \
+  --check-manifest --login-method browser
+```
+
+This reuses a saved browser session from the GUI or CLI when available. If you have
+an old password/token-only session, add `--no-cache` to sign in through Chromium
+without reading or saving a session. If `F1TV_TOKEN` is set, unset it for browser
+sign-in. Add `--channel INTERNATIONAL` (or another feed name) to check a specific
+feed; the default is the video's advertised default feed.
+
+To produce a report that you can attach when troubleshooting:
+
+```sh
+python -m f1tv_dl \
+  'https://f1tv.formula1.com/detail/1000010409/2026-united-states-grand-prix' \
+  --check-manifest --login-method browser --json > f1tv-manifest-check.json
+```
+
+In the GUI, sign in through **Account → Browser sign-in**, load the video on
+**Download**, check exactly one feed, then click **Check manifest / 4K** under
+**Quality & audio**. The report window provides **Copy report** and **Save report**
+buttons; both export the same JSON as the command above. The check runs in the
+background and supports **Cancel** between network operations.
+
+The report compares normal web playback with two experimental Android TV
+device-header/endpoint probes. These probes do not emulate Android TV hardware
+or perform a Widevine license exchange. It lists advertised resolutions, codec
+families, DRM/encryption markers, and HTTP errors. It inspects the highest HLS
+video variant and its associated audio playlists (up to six manifests per profile),
+or the returned DASH MPD, without requesting segments, initialization files,
+encryption keys, or licenses. Tiled DASH dimensions do not prove the assembled
+playback resolution. A 2160p entry establishes that a manifest advertises that
+size; it does not establish that a playable 4K download is available.
+
+HTTP 451 means access was restricted for that request; it does not establish UHD
+eligibility or identify the restriction's cause. Failed profiles are retained in
+the report, and other profiles are still checked. Reports omit account credentials,
+bearer tokens, signed playback URLs, raw API responses, and license data.
+Exit status is `1` if no manifest could be inspected; the JSON report is still
+written for playback access failures. Login or metadata failures appear on stderr
+before a report can be produced. Read errors alongside any partially inspected data.
+
+## Other sign-in methods
+
 Alternatively, set `F1TV_TOKEN` to the `entitlement_token` cookie from your signed-in
 F1 TV session. This is the entitlement token, not the subscription token inside
 `login-session`. Treat it like a password. An explicitly supplied token is never
@@ -214,6 +277,8 @@ Run `f1tv-dl --help` for all options. Original flags remain available: `-c`, `-i
 | Option | Default / environment | Purpose |
 | --- | --- | --- |
 | `--token` | `F1TV_TOKEN` | Existing entitlement token |
+| `--check-manifest` | Off | Compare web/Android TV manifest resolutions and DRM |
+| `--json` | Off | Export a shareable JSON report with `--check-manifest` |
 | `--login-method` | `password` | `password` or `browser` login |
 | `--session-file` | Platform cache | Session location |
 | `--no-cache` | Off | Disable session cache |

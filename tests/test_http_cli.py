@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import os
 import unittest
 from unittest.mock import Mock, patch
@@ -9,8 +10,10 @@ from urllib.request import Request
 
 from test_models import FIXTURE, URL
 
+from f1tv_dl.auth import SessionCredentials
 from f1tv_dl.cli import main, parser
 from f1tv_dl.config import default_session_path
+from f1tv_dl.diagnostics import ManifestReport, ProfileReport
 from f1tv_dl.errors import APIError, F1TVError
 from f1tv_dl.http import HttpClient, SafeRedirectHandler, network_summary, validate_media_url
 
@@ -125,6 +128,68 @@ class HTTPTests(unittest.TestCase):
 
 
 class CLITests(unittest.TestCase):
+    def test_manifest_check_skips_media_dependencies_and_prints_json_for_selected_feed(self):
+        http = Mock()
+        http.get_json.return_value = FIXTURE
+        report = ManifestReport(
+            "1000010409",
+            "VER",
+            [
+                ProfileReport(
+                    "web", "Web", http_status=200, manifests_checked=1, resolutions=["3840x2160"]
+                ),
+            ],
+        )
+        out = io.StringIO()
+        with (
+            patch("f1tv_dl.cli.HttpClient", return_value=http),
+            patch("f1tv_dl.cli.check_manifests", return_value=report) as check,
+            patch("f1tv_dl.cli.require_binary") as binary,
+            patch("f1tv_dl.cli.download") as download,
+            contextlib.redirect_stdout(out),
+        ):
+            self.assertEqual(
+                main([URL, "--check-manifest", "--json", "-c", "VER", "--no-cache"]), 0
+            )
+        self.assertEqual(json.loads(out.getvalue())["feed"], "VER")
+        self.assertEqual(check.call_args.args[2].title, "VER")
+        binary.assert_not_called()
+        download.assert_not_called()
+
+    def test_blocked_manifest_checks_still_print_shareable_report_and_exit_one(self):
+        http = Mock()
+        http.get_json.side_effect = [
+            FIXTURE,
+            *(APIError("Playback authorization", 451) for _ in range(3)),
+        ]
+        out = io.StringIO()
+        with (
+            patch("f1tv_dl.cli.HttpClient", return_value=http),
+            patch("f1tv_dl.cli.Authenticator") as auth,
+            patch("f1tv_dl.cli.require_binary") as binary,
+            contextlib.redirect_stdout(out),
+        ):
+            auth.return_value.browser_login.return_value = SessionCredentials(
+                "private-entitlement",
+                "private-subscription",
+            )
+            status = main(
+                [URL, "--check-manifest", "--json", "--login-method", "browser", "--no-cache"]
+            )
+        self.assertEqual(status, 1)
+        report = json.loads(out.getvalue())
+        self.assertEqual([item["http_status"] for item in report["profiles"]], [451, 451, 451])
+        self.assertNotIn("private-", out.getvalue())
+        binary.assert_not_called()
+
+    def test_json_requires_manifest_mode_before_network_or_sign_in(self):
+        with (
+            patch("f1tv_dl.cli.HttpClient") as http,
+            self.assertLogs(level="ERROR"),
+        ):
+            self.assertEqual(main([URL, "--json"]), 1)
+        http.assert_not_called()
+
     def test_configured_cache_does_not_evaluate_home(self):
         key = "LOCALAPPDATA" if os.name == "nt" else "XDG_CACHE_HOME"
         with (
