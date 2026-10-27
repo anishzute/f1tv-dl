@@ -183,7 +183,9 @@ class BrowserAuthTests(unittest.TestCase):
         http = Mock()
         http.get_json.return_value = {"resultObj": {"entitlementToken": "entitlement"}}
         token = Authenticator(http).browser_login(headless=True, executable="chromium")
-        self.assertEqual(token, SessionCredentials("entitlement", "subscription"))
+        self.assertEqual(token.entitlement_token, "entitlement")
+        self.assertEqual(token.subscription_token, "subscription")
+        self.assertIsNotNone(token.web_client)
         self.assertEqual(self.page.goto.call_args.args[0], self.oauth.authorization_url)
         self.assertEqual(self.page.goto.call_args.kwargs["wait_until"], "commit")
         self.context.cookies.assert_not_called()
@@ -260,7 +262,11 @@ class APITests(unittest.TestCase):
         self.assertTrue(call.args[0].endswith(fixture["playback_path"]))
         self.assertEqual(call.kwargs["params"]["player"], fixture["playback_player"])
         self.assertEqual(
-            {k.lower(): v for k, v in call.kwargs["headers"].items() if k.lower() != "user-agent"},
+            {
+                k.lower(): v
+                for k, v in call.kwargs["headers"].items()
+                if k.lower() in {"ascendontoken", "entitlementtoken"}
+            },
             {"ascendontoken": "subscription", "entitlementtoken": "entitlement"},
         )
 

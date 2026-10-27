@@ -193,18 +193,26 @@ def run(args):
     if args.stream_url:
         print(playback.url)
         return
-    check_manifest(http.get_text(playback.url, operation="Manifest lookup"))
+    agent = sessions.web_client.user_agent if sessions.web_client is not None else None
+    media_headers = {"User-Agent": agent} if agent else None
+    check_manifest(http.get_text(playback.url, headers=media_headers, operation="Manifest lookup"))
     selected = select_streams(
-        probe(playback.url, timeout=args.timeout), args.audio_stream, args.video_size
+        probe(playback.url, timeout=args.timeout, user_agent=agent),
+        args.audio_stream,
+        args.video_size,
     )
     secondary = None
     if international is not None:
         secondary_playback = client.playback(content, international, sessions)
         check_manifest(
-            http.get_text(secondary_playback.url, operation="International manifest lookup")
+            http.get_text(
+                secondary_playback.url,
+                headers=media_headers,
+                operation="International manifest lookup",
+            )
         )
         secondary_selection = select_streams(
-            probe(secondary_playback.url, timeout=args.timeout),
+            probe(secondary_playback.url, timeout=args.timeout, user_agent=agent),
             args.international_audio,
             audio_only=True,
         )
@@ -227,6 +235,7 @@ def run(args):
         offset=args.itsoffset,
         duration=args.duration,
         timeout=args.timeout,
+        user_agent=agent,
     )
     LOG.info("Download complete: %s", output)
 

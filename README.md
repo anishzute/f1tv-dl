@@ -41,17 +41,24 @@ A desktop display and FFmpeg are required; the CLI Docker image stays headless.
    exchange; the F1 account application and its loading screen are not needed.
    The browser closes when authorization is received. The status bar shows the
    remaining session authorization step.
-2. On **Download**, paste your video URL and click **Load video**. Choose a feed
-   from the table. Channel listing also works before signing in.
+2. On **Download**, paste your video URL and click **Load video**. Choose one or
+   more feeds from the table using Ctrl-click or Shift-click, or click **Select all**.
+   Channel listing also works before signing in.
 3. Select quality and audio. **Check streams** discovers the actual resolutions
-   and languages for the chosen feed. Extra international audio is optional.
-4. Click **Choose folder**, select MP4 or TS, and click **Download video**.
-   The app shows progress, output size, and download speed. **Cancel** stops the
-   operation and removes an incomplete video; **Open folder** shows a finished file.
+   and languages when a single feed is selected. Settings apply to every selected
+   feed. Extra international audio is optional.
+4. Click **Choose folder**, select MP4 or TS, and click **Download video** (or
+   **Download selected** for multiple feeds). Feeds download one at a time into
+   separate files. The table shows each feed's queue status; the app shows progress,
+   output size, and download speed. A failed feed does not stop the remaining queue.
+   **Cancel** stops the queue and removes the current incomplete video, keeping
+   completed files. **Open folder** shows a finished file.
 
 **Settings** provides audio offset, sample duration, network timeout, metadata
 country/entitlement, cache location, and an optional installed Chromium path.
 **Copy playback link** copies the authorized URL without including it in the log.
+Select a single feed to use it. Escaped Unicode names and HTML entities in video
+metadata are decoded for display, and the app selects an available Unicode font.
 The status and Cancel button remain visible while the tabs scroll in smaller windows.
 
 Sign-in and downloads run in background workers so the window stays responsive.
@@ -112,8 +119,12 @@ installed Chromium browser. The default Docker image contains the core client an
 FFmpeg, without a browser.
 
 New browser sessions use the website's `WEB_DASH` entitlement endpoint and
-`WEB_HLS` playback API with both required tokens. The requested feed is selected
-from the returned playback feeds. Legacy entitlement-only sessions remain readable.
+`WEB_HLS` playback API with both required tokens, device information, a shared
+session ID, and a fresh correlation ID for each request. The actual Chromium
+user agent is also used for manifest lookup, FFprobe, and FFmpeg. The requested
+feed is selected from the returned playback feeds. Sign out and sign in once
+after upgrading to 1.3 to capture this browser context for an existing session.
+Legacy entitlement-only sessions remain readable.
 Resolution choices come from the authorized manifest; using Chromium for sign-in
 alone does not guarantee 4K playback or downloads.
 
@@ -125,7 +136,8 @@ saved to disk or silently replaced with another login.
 Password login exchanges the subscription token for an entitlement token. Sessions
 are cached atomically at `$XDG_CACHE_HOME/f1tv-dl/session.json`, defaulting to
 `~/.cache/f1tv-dl/session.json`, or `%LOCALAPPDATA%\f1tv-dl\session.json` on Windows.
-The cache stores bearer tokens in JSON, with owner-only file permissions on POSIX.
+The cache stores bearer tokens and browser request context in JSON, with owner-only
+file permissions on POSIX.
 Protect the directory with your account ACLs on Windows. Use `--session-file PATH`
 to choose a location or `--no-cache` to disable cache reads and writes. The old
 `.f1tv.json` cache is not imported; sign in once after migrating.
@@ -233,9 +245,11 @@ credentials or external requests are needed in CI.
 
 Desktop interaction tests run when Tk and a display are available. On headless
 Linux, use `xvfb-run -a python -m unittest discover -s tests -v`. They exercise
-graphical sign-in, feed selection, audio settings, download completion, cancellation,
-folder selection, error recovery, and sign-out. Media integration tests also check
-the desktop service against real locally generated streams and FFmpeg progress.
+graphical sign-in, multiple feed selection, Unicode names, audio settings, queue
+completion, cancellation, folder selection, error recovery, and sign-out. Media
+integration tests also check the desktop service against real locally generated
+streams and FFmpeg progress, including required playback headers and matching
+browser identity across two queued downloads.
 Browser-flow tests use real Chromium with intercepted fixture pages and no live
 account credentials. Install the `browser` extra and run `playwright install chromium`
 to enable them. They cover direct identity-provider authorization,

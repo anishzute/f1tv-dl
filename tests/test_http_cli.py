@@ -69,13 +69,23 @@ class HTTPTests(unittest.TestCase):
     def test_cross_origin_redirect_strips_credentials(self):
         request = Request(
             URL,
-            headers={"entitlementToken": "private", "apikey": "private", "Accept": "text/plain"},
+            headers={
+                "entitlementToken": "private",
+                "apikey": "private",
+                "Accept": "text/plain",
+                "x-f1-device-info": "device=web",
+                "sessionid": "private-session",
+                "correlationid": "private-request",
+            },
         )
         redirected = SafeRedirectHandler().redirect_request(
             request, None, 302, "", {}, "https://cdn.test/master.m3u8"
         )
         self.assertFalse(redirected.has_header("Entitlementtoken"))
         self.assertFalse(redirected.has_header("Apikey"))
+        self.assertFalse(redirected.has_header("X-f1-device-info"))
+        self.assertFalse(redirected.has_header("Sessionid"))
+        self.assertFalse(redirected.has_header("Correlationid"))
         self.assertEqual(redirected.get_header("Accept"), "text/plain")
 
     def test_redirect_downgrade_is_rejected(self):

@@ -11,6 +11,7 @@ from .auth import SessionCredentials
 from .errors import AuthenticationError, OperationCancelled
 from .http import HttpClient
 from .oauth import OAuthSession, callback_location, trusted_origin
+from .web import WebClient
 
 LOG = logging.getLogger(__name__)
 SIGN_IN = re.compile(r"^(sign\s*in|log\s*in)$", re.I)
@@ -138,7 +139,7 @@ class BrowserAuthorization:
                 raise AuthenticationError("The sign-in browser closed before sign-in finished.")
             for page in pages:
                 if self.oauth.capture(page.url):
-                    self.emit("F1 authorization received. Completing sign-in…")
+                    self.emit("F1 authorization received. Completing sign-in...")
                     return
                 for frame in page.frames:
                     try:
@@ -192,7 +193,7 @@ def browser_login(
         ) from None
     http = http if http is not None else HttpClient()
     if status:
-        status("Connecting to the official F1 sign-in service…")
+        status("Connecting to the official F1 sign-in service...")
     oauth = OAuthSession.discover(http)
     check_cancel(cancel)
     browser = None
@@ -207,11 +208,13 @@ def browser_login(
                     options["proxy"] = proxy
                 browser = playwright.chromium.launch(**options)
                 context = browser.new_context()
+                page = context.new_page()
+                web_client = WebClient.create(page.evaluate("navigator.userAgent"), browser.version)
                 flow = BrowserAuthorization(
                     context, oauth, username, password, cancel=cancel, status=status
                 )
-                flow.emit("Opening F1 sign-in directly in Chromium…")
-                context.new_page().goto(oauth.authorization_url, wait_until="commit", timeout=15000)
+                flow.emit("Opening F1 sign-in directly in Chromium...")
+                page.goto(oauth.authorization_url, wait_until="commit", timeout=15000)
                 flow.wait(timeout, Error)
             finally:
                 if browser is not None:
@@ -222,5 +225,5 @@ def browser_login(
     check_cancel(cancel)
     subscription = oauth.exchange(http)
     check_cancel(cancel)
-    flow.emit("Authorizing the F1 TV session…")
-    return SessionCredentials(exchange(subscription), subscription)
+    flow.emit("Authorizing the F1 TV session...")
+    return SessionCredentials(exchange(subscription, web_client), subscription, web_client)

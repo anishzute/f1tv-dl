@@ -70,10 +70,10 @@ def require_binary(name: str) -> str:
     return executable
 
 
-def input_options(timeout: float, url: str) -> list[str]:
+def input_options(timeout: float, url: str, user_agent=None) -> list[str]:
     options = [
         "-user_agent",
-        USER_AGENT,
+        user_agent or USER_AGENT,
         "-rw_timeout",
         str(int(timeout * 1_000_000)),
     ]
@@ -93,13 +93,13 @@ def media_environment():
     return environment
 
 
-def probe(url: str, *, timeout: float = 30.0) -> dict:
+def probe(url: str, *, timeout: float = 30.0, user_agent=None) -> dict:
     validate_media_url(url)
     command = [
         require_binary("ffprobe"),
         "-v",
         "error",
-        *input_options(timeout, url),
+        *input_options(timeout, url, user_agent),
         "-show_streams",
         "-show_programs",
         "-of",
@@ -242,6 +242,7 @@ def build_command(
     offset="00:00:00.000",
     duration=None,
     timeout=30.0,
+    user_agent=None,
 ):
     if selection.video is None:
         raise MediaError("A video stream is required for the primary feed.")
@@ -254,14 +255,14 @@ def build_command(
         "-nostats",
         "-progress",
         "pipe:1",
-        *input_options(timeout, url),
+        *input_options(timeout, url, user_agent),
         "-i",
         validate_media_url(url),
     ]
     if secondary is not None:
         secondary_url, secondary_selection = secondary
         command += [
-            *input_options(timeout, secondary_url),
+            *input_options(timeout, secondary_url, user_agent),
             "-itsoffset",
             offset,
             "-i",

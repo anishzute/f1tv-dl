@@ -8,7 +8,7 @@ from test_models import FIXTURE, URL
 
 from f1tv_dl.auth import SessionCredentials
 from f1tv_dl.desktop import DesktopService, DownloadOptions, install_browser_support
-from f1tv_dl.errors import AuthenticationError, F1TVError, OperationCancelled
+from f1tv_dl.errors import APIError, AuthenticationError, F1TVError, OperationCancelled
 from f1tv_dl.models import Content, ContentRef
 
 
@@ -138,6 +138,72 @@ class DesktopServiceTests(unittest.TestCase):
         ):
             with self.subTest(options=options), self.assertRaises(F1TVError):
                 options.validate()
+
+    def test_multiple_feed_downloads_run_once_each_in_selection_order(self):
+        updates = []
+        self.service.download = Mock(
+            side_effect=lambda c, o, **kw: self.root / (o.channel + ".mp4")
+        )
+        result = self.service.download_many(
+            self.content,
+            DownloadOptions(self.root),
+            ["VER", "HAM", "ver"],
+            item_status=updates.append,
+        )
+        self.assertEqual(
+            [call.args[1].channel for call in self.service.download.call_args_list], ["VER", "HAM"]
+        )
+        self.assertEqual(result.completed, (self.root / "VER.mp4", self.root / "HAM.mp4"))
+        self.assertEqual(result.failed, ())
+        self.assertEqual(
+            [u.state for u in updates],
+            ["Queued", "Queued", "Downloading", "Complete", "Downloading", "Complete"],
+        )
+
+    def test_failed_feed_does_not_discard_or_stop_other_downloads(self):
+        self.service.download = Mock(
+            side_effect=[
+                self.root / "VER.mp4",
+                APIError("Playback authorization", 500),
+                self.root / "NOR.mp4",
+            ]
+        )
+        result = self.service.download_many(
+            self.content, DownloadOptions(self.root), ["VER", "HAM", "NOR"]
+        )
+        self.assertEqual(result.completed, (self.root / "VER.mp4", self.root / "NOR.mp4"))
+        self.assertEqual(result.failed[0][0], "HAM")
+        self.assertIn("HTTP 500", result.failed[0][1])
+        self.assertEqual(self.service.download.call_count, 3)
+
+    def test_cancelling_queue_keeps_completed_file_and_skips_remaining_feeds(self):
+        cancel = threading.Event()
+        updates = []
+        path = self.root / "VER.mp4"
+
+        def first(content, options, **callbacks):
+            path.write_bytes(b"complete")
+            cancel.set()
+            return path
+
+        self.service.download = Mock(side_effect=first)
+        with self.assertRaises(OperationCancelled):
+            self.service.download_many(
+                self.content,
+                DownloadOptions(self.root),
+                ["VER", "HAM", "NOR"],
+                cancel=cancel,
+                item_status=updates.append,
+            )
+        self.assertEqual(path.read_bytes(), b"complete")
+        self.assertEqual(self.service.download.call_count, 1)
+        self.assertEqual([u.state for u in updates[-3:]], ["Complete", "Cancelled", "Cancelled"])
+
+    def test_empty_queue_is_rejected_before_downloading(self):
+        self.service.download = Mock()
+        with self.assertRaisesRegex(F1TVError, "Select at least one"):
+            self.service.download_many(self.content, DownloadOptions(self.root), [])
+        self.service.download.assert_not_called()
 
     def test_browser_setup_subprocesses_are_never_passed_credentials(self):
         process = Mock(returncode=0)

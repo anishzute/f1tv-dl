@@ -6,6 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -13,7 +14,7 @@ from test_models import FIXTURE, URL
 
 from f1tv_dl.auth import SessionCredentials
 from f1tv_dl.desktop import DesktopService, VideoInfo
-from f1tv_dl.errors import AuthenticationError, OperationCancelled
+from f1tv_dl.errors import APIError, AuthenticationError, OperationCancelled
 from f1tv_dl.gui import DownloaderApp, tk
 from f1tv_dl.media import DownloadProgress
 from f1tv_dl.models import Content, ContentRef
@@ -44,6 +45,9 @@ class DesktopInteractionTests(unittest.TestCase):
         self.errors = patch("f1tv_dl.gui.messagebox.showerror")
         self.showerror = self.errors.start()
         self.addCleanup(self.errors.stop)
+        warning_patch = patch("f1tv_dl.gui.messagebox.showwarning")
+        self.showwarning = warning_patch.start()
+        self.addCleanup(warning_patch.stop)
         self.addCleanup(self.cleanup_app)
         self.root.update()
 
@@ -51,6 +55,7 @@ class DesktopInteractionTests(unittest.TestCase):
         self.app._destroy()
         self.app.executor.shutdown(wait=True, cancel_futures=True)
         self.showerror.reset_mock()
+        self.showwarning.reset_mock()
         self.app = self.root = self.service = None
         # Mock callbacks create cycles. Finalize Tk variables here, on the Tk thread,
         # before later HTTP/FFmpeg worker threads can trigger garbage collection.
@@ -126,6 +131,109 @@ class DesktopInteractionTests(unittest.TestCase):
         self.assertEqual(self.app.password.get(), "")
         self.assertNotIn("private-browser-password", self.app.log.get("1.0", "end"))
         self.showerror.assert_not_called()
+
+    def test_multiple_selected_feeds_are_saved_as_separate_files(self):
+        self.login()
+        self.load()
+        indices = [str(i) for i, c in enumerate(self.content.channels) if c.title in ("VER", "HAM")]
+        self.app.feeds.selection_set(indices)
+        self.root.update()
+        self.assertEqual(str(self.app.feeds.cget("selectmode")), "extended")
+        self.assertTrue(self.app.inspect_button.instate(["disabled"]))
+        self.assertTrue(self.app.link_button.instate(["disabled"]))
+
+        def save(content, options, **callbacks):
+            result = self.folder / (options.channel + ".mp4")
+            result.write_bytes(b"complete")
+            return result
+
+        self.service.download = Mock(side_effect=save)
+        self.app.start_download()
+        self.wait_idle()
+        self.assertEqual(self.service.download.call_count, 2)
+        self.assertTrue((self.folder / "VER.mp4").is_file())
+        self.assertTrue((self.folder / "HAM.mp4").is_file())
+        self.assertEqual(self.app.progress_text.get(), "2 downloads complete")
+        for row in indices:
+            self.assertEqual(self.app.feeds.set(row, "status"), "Complete")
+        self.showerror.assert_not_called()
+
+    def test_select_all_and_clear_update_download_actions(self):
+        self.login()
+        self.load()
+        self.app.select_all_feeds()
+        self.assertEqual(len(self.app._channels()), 26)
+        self.assertIn("26", self.app.download_button.cget("text"))
+        self.app.clear_feeds()
+        self.assertEqual(self.app._channels(), ())
+        self.assertTrue(self.app.download_button.instate(["disabled"]))
+
+    def test_cancelling_multiple_feeds_keeps_the_completed_file(self):
+        self.login()
+        self.load()
+        rows = [
+            str(i) for i, c in enumerate(self.content.channels) if c.title in ("VER", "HAM", "NOR")
+        ]
+        self.app.feeds.selection_set(rows)
+        self.root.update()
+        started = threading.Event()
+        first = self.folder / "completed.mp4"
+        count = 0
+
+        def save(content, options, **callbacks):
+            nonlocal count
+            count += 1
+            if count == 1:
+                first.write_bytes(b"completed")
+                return first
+            started.set()
+            callbacks["cancel"].wait(3)
+            raise OperationCancelled()
+
+        self.service.download = Mock(side_effect=save)
+        self.app.start_download()
+        self.assertTrue(started.wait(1))
+        self.app.cancel()
+        self.wait_idle()
+        self.assertEqual(self.service.download.call_count, 2)
+        self.assertEqual(first.read_bytes(), b"completed")
+        self.assertEqual(self.app.last_output, first)
+        self.assertIn("Kept 1 completed", self.app.status.get())
+        self.assertTrue(self.app.open_button.instate(["!disabled"]))
+        self.assertEqual(
+            [self.app.feeds.set(row, "status") for row in rows],
+            ["Complete", "Cancelled", "Cancelled"],
+        )
+        self.showerror.assert_not_called()
+
+    def test_failed_feed_is_reported_after_other_selected_feeds_finish(self):
+        self.login()
+        self.load()
+        indices = [str(i) for i, c in enumerate(self.content.channels) if c.title in ("VER", "HAM")]
+        self.app.feeds.selection_set(indices)
+        self.root.update()
+        self.service.download = Mock(
+            side_effect=[APIError("Playback authorization", 500), self.folder / "complete.mp4"]
+        )
+        self.app.start_download()
+        self.wait_idle()
+        self.assertEqual(self.service.download.call_count, 2)
+        self.assertIn("1 downloaded, 1 failed", self.app.status.get())
+        self.assertEqual(self.app.feeds.set(indices[0], "status"), "Failed")
+        self.assertEqual(self.app.feeds.set(indices[1], "status"), "Complete")
+        self.showwarning.assert_called_once()
+        self.assertIn("HTTP 500", self.app.log.get("1.0", "end"))
+
+    def test_unicode_names_and_portable_password_mask_display_correctly(self):
+        channel = replace(
+            self.content.channels[0], title=r"P\u00e9rez", driver_name=r"Sergio P\u00e9rez"
+        )
+        content = replace(self.content, title=r"Race \u2022 S\u00e3o Paulo", channels=(channel,))
+        self.app._video_loaded(content)
+        self.root.update()
+        self.assertIn("Race • São Paulo", self.app.video_title.get())
+        self.assertEqual(self.app.feeds.item("0", "values")[:2], ("Pérez", "Sergio Pérez"))
+        self.assertEqual(self.app.account_entries["Password"].cget("show"), "*")
 
     def test_cancel_keeps_the_window_responsive(self):
         self.login()

@@ -9,9 +9,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import __version__
 from .config import API_KEY, BASE_URL, DISTRIBUTION_CHANNEL, LOGIN_URL
 from .errors import APIError, AuthenticationError, F1TVError
+from .web import WebClient
 
 LOG = logging.getLogger(__name__)
 
@@ -20,6 +20,7 @@ LOG = logging.getLogger(__name__)
 class SessionCredentials:
     entitlement_token: str
     subscription_token: str
+    web_client: WebClient | None = None
 
 
 def token_is_fresh(token: str) -> bool:
@@ -50,7 +51,9 @@ class SessionStore:
             subscription = data.get("subscription_token")
             if subscription is not None:
                 return (
-                    SessionCredentials(token, subscription)
+                    SessionCredentials(
+                        token, subscription, WebClient.from_dict(data.get("web_client"))
+                    )
                     if token_is_fresh(subscription)
                     else None
                 )
@@ -75,6 +78,9 @@ class SessionStore:
                     if isinstance(token, SessionCredentials)
                     else {"version": 1, "token": token}
                 )
+                if isinstance(token, SessionCredentials) and token.web_client is not None:
+                    data["version"] = 3
+                    data["web_client"] = token.web_client.as_dict()
                 json.dump(data, handle)
                 handle.write("\n")
                 handle.flush()
@@ -96,10 +102,12 @@ class Authenticator:
     def __init__(self, http):
         self.http = http
 
-    def exchange_subscription_token(self, token: str, *, platform="BIG_SCREEN_HLS") -> str:
+    def exchange_subscription_token(
+        self, token: str, *, platform="BIG_SCREEN_HLS", web_client=None
+    ) -> str:
         headers = {"ascendontoken": token}
         if platform == "WEB_DASH":
-            headers["User-Agent"] = "f1tv-dl/" + __version__
+            headers.update((web_client or WebClient.create()).headers())
         payload = self.http.get_json(
             BASE_URL + f"/2.0/R/ENG/{platform}/ALL/USER/ENTITLEMENT",
             headers=headers,
@@ -152,7 +160,9 @@ class Authenticator:
         from .browser import browser_login
 
         return browser_login(
-            lambda token: self.exchange_subscription_token(token, platform="WEB_DASH"),
+            lambda token, web_client: self.exchange_subscription_token(
+                token, platform="WEB_DASH", web_client=web_client
+            ),
             username,
             password,
             http=self.http,
@@ -177,6 +187,11 @@ class SessionManager:
         )
         self.subscription_token = (
             credentials.subscription_token if isinstance(credentials, SessionCredentials) else None
+        )
+        self.web_client = (
+            credentials.web_client or WebClient.create()
+            if isinstance(credentials, SessionCredentials)
+            else None
         )
         if self.explicit and (
             not token_is_fresh(self.token)
@@ -211,5 +226,10 @@ class SessionManager:
             raise F1TVError("Login returned an invalid or expired session token.")
         self.token = token
         self.subscription_token = subscription
+        self.web_client = (
+            credentials.web_client or WebClient.create()
+            if isinstance(credentials, SessionCredentials)
+            else None
+        )
         self.store.save(credentials)
         return token

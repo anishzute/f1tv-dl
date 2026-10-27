@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from .errors import F1TVError
+from .text import display_text
 
 
 @dataclass(frozen=True)
@@ -54,12 +55,13 @@ class Channel:
         else:
             channel_id = data.get("channelId")
         driver = " ".join(
-            str(data.get(key) or "").strip() for key in ("driverFirstName", "driverLastName")
+            display_text(data.get(key) or "").strip()
+            for key in ("driverFirstName", "driverLastName")
         ).strip()
         return cls(
-            title=str(data.get("title") or data.get("reportingName") or "Main"),
+            title=display_text(data.get("title") or data.get("reportingName") or "Main"),
             channel_id=str(channel_id) if channel_id is not None else None,
-            reporting_name=str(data.get("reportingName") or ""),
+            reporting_name=display_text(data.get("reportingName") or ""),
             driver_name=driver,
             racing_number=str(data.get("racingNumber", "")) if driver else "",
             default=data.get("default") is True,
@@ -102,7 +104,7 @@ class Content:
             channels = tuple(Channel.from_dict(item) for item in streams)
             duration = metadata.get("duration")
             duration = max(0, duration) if isinstance(duration, (int, float)) else 0
-            return cls(ref, str(metadata.get("title") or ref.name), channels, duration)
+            return cls(ref, display_text(metadata.get("title") or ref.name), channels, duration)
         except (KeyError, TypeError, ValueError, StopIteration, AttributeError):
             raise F1TVError(
                 "Content metadata was missing or did not match the requested video."

@@ -42,6 +42,9 @@ class SafeRedirectHandler(HTTPRedirectHandler):
                 "Ascendontoken",
                 "Cookie",
                 "Apikey",
+                "X-f1-device-info",
+                "Sessionid",
+                "Correlationid",
             ):
                 redirected.remove_header(header)
         return redirected

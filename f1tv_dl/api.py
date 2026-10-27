@@ -3,11 +3,11 @@
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-from . import __version__
 from .config import BASE_URL, Settings
 from .errors import APIError, DRMError, F1TVError
 from .http import validate_media_url
 from .models import Content, ContentRef
+from .web import WebClient
 
 
 @dataclass(frozen=True)
@@ -63,7 +63,10 @@ class F1TVClient:
                     params.pop("channelId", None)
             headers = {"entitlementToken": token}
             if web_session:
-                headers["User-Agent"] = "f1tv-dl/" + __version__
+                client = getattr(sessions, "web_client", None)
+                headers.update(
+                    (client if isinstance(client, WebClient) else WebClient.create()).headers()
+                )
                 headers["ascendontoken"] = subscription
                 params["player"] = "player_tm"
             else:

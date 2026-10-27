@@ -5,7 +5,7 @@ import re
 import subprocess
 import sys
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .api import F1TVClient
@@ -45,6 +45,22 @@ class DownloadOptions:
 class VideoInfo:
     resolutions: tuple[str, ...]
     languages: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class DownloadQueueUpdate:
+    index: int
+    total: int
+    channel: str | None
+    state: str
+    output: Path | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class DownloadBatchResult:
+    completed: tuple[Path, ...]
+    failed: tuple[tuple[str | None, str], ...]
 
 
 def check_cancel(cancel):
@@ -121,11 +137,20 @@ class DesktopService:
     def stream_url(self, content, channel=None):
         return self.client.playback(content, content.select_channel(channel), self.sessions).url
 
+    @property
+    def media_user_agent(self):
+        client = self.sessions.web_client
+        return client.user_agent if client is not None else None
+
+    def manifest(self, url, operation="Manifest lookup"):
+        headers = {"User-Agent": self.media_user_agent} if self.media_user_agent else None
+        return self.http.get_text(url, headers=headers, operation=operation)
+
     def inspect(self, content, channel=None, cancel=None):
         url = self.stream_url(content, channel)
         check_cancel(cancel)
-        check_manifest(self.http.get_text(url, operation="Manifest lookup"))
-        payload = probe(url, timeout=self.settings.timeout)
+        check_manifest(self.manifest(url))
+        payload = probe(url, timeout=self.settings.timeout, user_agent=self.media_user_agent)
         check_cancel(cancel)
         streams = payload.get("streams", [])
         resolutions = {
@@ -164,29 +189,31 @@ class DesktopService:
             )
         check_cancel(cancel)
         if status:
-            status("Checking the selected video and audio…")
+            status("Checking the selected video and audio...")
         url = self.stream_url(content, options.channel)
-        check_manifest(self.http.get_text(url, operation="Manifest lookup"))
+        check_manifest(self.manifest(url))
         check_cancel(cancel)
         selected = select_media(
-            probe(url, timeout=self.settings.timeout), options.audio, options.resolution
+            probe(url, timeout=self.settings.timeout, user_agent=self.media_user_agent),
+            options.audio,
+            options.resolution,
         )
         secondary = None
         if international is not None:
             check_cancel(cancel)
             secondary_url = self.stream_url(content, "INTERNATIONAL")
-            check_manifest(
-                self.http.get_text(secondary_url, operation="International manifest lookup")
-            )
+            check_manifest(self.manifest(secondary_url, operation="International manifest lookup"))
             selected_audio = select_media(
-                probe(secondary_url, timeout=self.settings.timeout),
+                probe(
+                    secondary_url, timeout=self.settings.timeout, user_agent=self.media_user_agent
+                ),
                 options.international,
                 audio_only=True,
             )
             secondary = (secondary_url, selected_audio)
         check_cancel(cancel)
         if status:
-            status(f"Downloading {selected.width}×{selected.height}, audio {selected.language}…")
+            status(f"Downloading {selected.width}x{selected.height}, audio {selected.language}...")
         download(
             url,
             selected,
@@ -199,19 +226,83 @@ class DesktopService:
             offset=options.offset,
             duration=options.duration,
             timeout=self.settings.timeout,
+            user_agent=self.media_user_agent,
         )
         return output.resolve()
+
+    def download_many(
+        self,
+        content,
+        options,
+        channels,
+        *,
+        progress=None,
+        status=None,
+        cancel=None,
+        item_status=None,
+    ):
+        """Download each selected feed once, keeping successes when another feed fails."""
+        check_cancel(cancel)
+        options.validate()
+        selected = []
+        for query in channels:
+            channel = content.select_channel(query)
+            name = channel.title if channel is not None else None
+            if name not in selected:
+                selected.append(name)
+        if not selected:
+            raise F1TVError("Select at least one feed to download.")
+
+        def emit(index, state, *, output=None, error=None):
+            if item_status:
+                item_status(
+                    DownloadQueueUpdate(
+                        index + 1, len(selected), selected[index], state, output=output, error=error
+                    )
+                )
+
+        def cancel_remaining(start):
+            for pending in range(start, len(selected)):
+                emit(pending, "Cancelled")
+
+        for index in range(len(selected)):
+            emit(index, "Queued")
+        completed, failed = [], []
+        for index, channel in enumerate(selected):
+            if cancel is not None and cancel.is_set():
+                cancel_remaining(index)
+                raise OperationCancelled()
+            emit(index, "Downloading")
+            try:
+                path = self.download(
+                    content,
+                    replace(options, channel=channel),
+                    progress=progress,
+                    status=status,
+                    cancel=cancel,
+                )
+            except OperationCancelled:
+                cancel_remaining(index)
+                raise
+            except (F1TVError, OSError) as error:
+                message = str(error)
+                failed.append((channel, message))
+                emit(index, "Failed", error=message)
+            else:
+                completed.append(path)
+                emit(index, "Complete", output=path)
+        return DownloadBatchResult(tuple(completed), tuple(failed))
 
 
 def install_browser_support(cancel=None, status=None):
     """Install the optional login browser after the user clicks its setup button."""
     steps = [
         (
-            "Installing browser support…",
+            "Installing browser support...",
             [sys.executable, "-m", "pip", "install", "playwright>=1.48,<2"],
         ),
         (
-            "Downloading the sign-in browser…",
+            "Downloading the sign-in browser...",
             [sys.executable, "-m", "playwright", "install", "chromium"],
         ),
     ]

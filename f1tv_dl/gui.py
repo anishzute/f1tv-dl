@@ -15,6 +15,7 @@ from . import __version__
 from .config import Settings
 from .desktop import DesktopService, DownloadOptions, install_browser_support
 from .errors import F1TVError, OperationCancelled
+from .text import display_text
 
 try:
     import tkinter as tk
@@ -78,6 +79,10 @@ class DownloaderApp:
         self.busy = False
         self.closing = False
         self.expected_seconds = 0
+        self.queue_index = 0
+        self.queue_total = 1
+        self.batch_completed = []
+        self.queue_rows = {}
         self.events = queue.Queue()
         self.cancel_event = threading.Event()
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="f1tv-desktop")
@@ -115,6 +120,7 @@ class DownloaderApp:
         self.account_status = tk.StringVar()
         self.video_title = tk.StringVar(value="Load a video to see its available feeds.")
         self.progress_text = tk.StringVar(value="No download running")
+        self.selection_text = tk.StringVar(value="No feeds selected")
         self.country = tk.StringVar(value=self.service.settings.country)
         self.entitlement = tk.StringVar(value=self.service.settings.entitlement)
         self.timeout = tk.StringVar(value=str(self.service.settings.timeout))
@@ -128,7 +134,18 @@ class DownloaderApp:
         self.root.minsize(820, 640)
         self.root.configure(background="#f5f5f7")
         default_font = font.nametofont("TkDefaultFont")
-        default_font.configure(size=10)
+        families = set(font.families(self.root))
+        family = next(
+            (
+                name
+                for name in ("Segoe UI", "DejaVu Sans", "Noto Sans", "Liberation Sans")
+                if name in families
+            ),
+            default_font.actual("family"),
+        )
+        default_font.configure(family=family, size=10)
+        for name in ("TkTextFont", "TkHeadingFont", "TkSmallCaptionFont"):
+            font.nametofont(name).configure(family=family)
         self.style = ttk.Style(self.root)
         self.style.theme_use("clam")
         self.style.configure(".", font=default_font)
@@ -249,15 +266,16 @@ class DownloaderApp:
         tree_row.pack(fill="x")
         self.feeds = ttk.Treeview(
             tree_row,
-            columns=("feed", "driver", "number"),
+            columns=("feed", "driver", "number", "status"),
             show="headings",
             height=4,
-            selectmode="browse",
+            selectmode="extended",
         )
         for column, title, width in (
             ("feed", "Feed", 230),
             ("driver", "Driver", 370),
             ("number", "Number", 90),
+            ("status", "Status", 120),
         ):
             self.feeds.heading(column, text=title)
             self.feeds.column(column, width=width, minwidth=70)
@@ -266,6 +284,20 @@ class DownloaderApp:
         scroll.pack(side="right", fill="y")
         self.feeds.configure(yscrollcommand=scroll.set)
         self.feeds.bind("<<TreeviewSelect>>", self._feed_changed)
+        selection_row = ttk.Frame(panel)
+        selection_row.pack(fill="x", pady=(8, 0))
+        ttk.Button(selection_row, text="Select all", command=self.select_all_feeds).pack(
+            side="left"
+        )
+        ttk.Button(selection_row, text="Clear", command=self.clear_feeds).pack(side="left", padx=8)
+        ttk.Label(selection_row, textvariable=self.selection_text).pack(side="left", padx=8)
+        ttk.Label(
+            panel,
+            text="Use Ctrl-click to select individual feeds or Shift-click for a range. "
+            "Each feed is saved as a separate file.",
+            style="Muted.TLabel",
+            wraplength=750,
+        ).pack(anchor="w", pady=(4, 0))
         actions = ttk.Frame(panel)
         actions.pack(fill="x", pady=(16, 8))
         ttk.Label(actions, text="2. Quality and audio", style="Section.TLabel").pack(side="left")
@@ -301,7 +333,7 @@ class DownloaderApp:
         folder = ttk.Frame(panel)
         folder.pack(fill="x", pady=8)
         ttk.Entry(folder, textvariable=self.directory).pack(side="left", fill="x", expand=True)
-        ttk.Button(folder, text="Choose folder…", command=self.choose_folder).pack(
+        ttk.Button(folder, text="Choose folder...", command=self.choose_folder).pack(
             side="left", padx=(8, 0)
         )
         file_row = ttk.Frame(panel)
@@ -363,7 +395,7 @@ class DownloaderApp:
                 )
                 entry.bind("<<ComboboxSelected>>", lambda event: self._account_fields())
             else:
-                entry = ttk.Entry(form, textvariable=variable, show="•" if row in (2, 3) else "")
+                entry = ttk.Entry(form, textvariable=variable, show="*" if row in (2, 3) else "")
                 self.account_entries[label] = entry
             entry.grid(row=row, column=1, sticky="ew", pady=9)
         self.remember_check = ttk.Checkbutton(
@@ -445,7 +477,7 @@ class DownloaderApp:
         ttk.Button(panel, text="Check again", command=self.check_tools).pack(anchor="w")
         ttk.Label(
             panel,
-            text=f"F1 TV Downloader {__version__} · Runs locally on your computer",
+            text=f"F1 TV Downloader {__version__} | Runs locally on your computer",
             style="Muted.TLabel",
         ).pack(anchor="w", pady=(20, 0))
         self.check_tools()
@@ -477,9 +509,15 @@ class DownloaderApp:
             else "You are signed out. Choose a sign-in method below."
         )
         self.signout_button.state(["!disabled"] if signed_in else ["disabled"])
-        ready = self.content is not None and signed_in
-        for button in (self.download_button, self.inspect_button, self.link_button):
-            button.state(["!disabled"] if ready else ["disabled"])
+        count = len(self._channels())
+        self.selection_text.set(f"{count} feed{'s' if count != 1 else ''} selected")
+        ready = self.content is not None and signed_in and count > 0
+        self.download_button.state(["!disabled"] if ready else ["disabled"])
+        self.download_button.configure(
+            text=f"Download selected ({count})" if count > 1 else "Download video"
+        )
+        for button in (self.inspect_button, self.link_button):
+            button.state(["!disabled"] if ready and count == 1 else ["disabled"])
         self.open_button.state(["!disabled"] if self.last_output else ["disabled"])
         self._account_fields()
 
@@ -521,6 +559,7 @@ class DownloaderApp:
     def _run(self, message, operation, success=None):
         if self.busy:
             return
+        self.batch_completed = []
         self.cancel_event = threading.Event()
         self._set_busy(True)
         self.status.set(message)
@@ -546,6 +585,8 @@ class DownloaderApp:
                 self._append_log(payload)
             elif kind == "progress":
                 self._show_progress(payload)
+            elif kind == "queue":
+                self._show_queue_update(payload)
             elif kind == "done":
                 success, result, error = payload
                 self.progress.stop()
@@ -554,7 +595,11 @@ class DownloaderApp:
                     self._destroy()
                     return
                 if isinstance(error, OperationCancelled):
-                    self.status.set("Cancelled. No incomplete video was saved.")
+                    self.status.set(
+                        f"Cancelled. Kept {len(self.batch_completed)} completed download(s)."
+                        if self.batch_completed
+                        else "Cancelled. No incomplete video was saved."
+                    )
                     self.progress_text.set("Cancelled")
                 elif error is not None:
                     text = (
@@ -583,11 +628,14 @@ class DownloaderApp:
         ]
         if self.expected_seconds:
             percent = min(99.9, progress.seconds / self.expected_seconds * 100)
-            self.progress.configure(mode="determinate", value=percent)
+            overall = ((max(1, self.queue_index) - 1) * 100 + percent) / self.queue_total
+            self.progress.configure(mode="determinate", value=overall)
             parts.insert(0, f"{percent:.0f}%")
+        if self.queue_total > 1:
+            parts.insert(0, f"Feed {self.queue_index}/{self.queue_total}")
         if progress.speed and progress.speed != "N/A":
             parts.append(progress.speed)
-        self.progress_text.set(" · ".join(parts))
+        self.progress_text.set(" | ".join(parts))
 
     def paste_url(self):
         try:
@@ -601,33 +649,45 @@ class DownloaderApp:
         url = self.url.get().strip()
         self.content = None
         self.feeds.delete(*self.feeds.get_children())
-        self.video_title.set("Loading video feeds…")
+        self.queue_rows.clear()
+        self.video_title.set("Loading video feeds...")
         self._run(
-            "Loading video feeds…", lambda cancel: self.service.load_video(url), self._video_loaded
+            "Loading video feeds...",
+            lambda cancel: self.service.load_video(url),
+            self._video_loaded,
         )
 
     def _video_loaded(self, content):
         self.content = content
         self.video_title.set(
-            content.title + (f" · {clock_time(content.duration)}" if content.duration else "")
+            display_text(content.title)
+            + (f" | {clock_time(content.duration)}" if content.duration else "")
         )
         self.feeds.delete(*self.feeds.get_children())
+        self.queue_rows.clear()
         for index, channel in enumerate(content.channels):
             self.feeds.insert(
                 "",
                 "end",
                 iid=str(index),
-                values=(channel.title, channel.driver_name, channel.racing_number),
+                values=(
+                    display_text(channel.title),
+                    display_text(channel.driver_name),
+                    channel.racing_number,
+                    "",
+                ),
             )
+            self.queue_rows[channel.title] = str(index)
         if content.channels:
             default = content.channels.index(content.select_channel())
             self.feeds.selection_set(str(default))
             self.feeds.see(str(default))
         else:
-            self.feeds.insert("", "end", iid="main", values=("Main feed", "", ""))
+            self.feeds.insert("", "end", iid="main", values=("Main feed", "", "", ""))
+            self.queue_rows[None] = "main"
             self.feeds.selection_set("main")
         self.status.set(
-            "Video loaded. Select a feed and download."
+            "Video loaded. Select one or more feeds to download."
             if self.service.signed_in
             else "Video loaded. Sign in on the Account tab to download."
         )
@@ -636,14 +696,34 @@ class DownloaderApp:
     def _feed_changed(self, event=None):
         if self.busy:
             return
+        count = len(self._channels())
+        self.selection_text.set(f"{count} feed{'s' if count != 1 else ''} selected")
         self.resolution.set("Best available")
         self.quality_combo.configure(values=["Best available"])
 
+        self._refresh_actions()
+
     def _channel(self):
-        selection = self.feeds.selection()
-        if self.content and self.content.channels and selection:
-            return self.content.channels[int(selection[0])].title
-        return None
+        channels = self._channels()
+        return channels[0] if channels else None
+
+    def _channels(self):
+        if self.content is None:
+            return ()
+        selection = set(self.feeds.selection())
+        return tuple(
+            self.content.channels[int(row)].title if row != "main" else None
+            for row in self.feeds.get_children()
+            if row in selection
+        )
+
+    def select_all_feeds(self):
+        self.feeds.selection_set(self.feeds.get_children())
+        self._feed_changed()
+
+    def clear_feeds(self):
+        self.feeds.selection_remove(self.feeds.selection())
+        self._feed_changed()
 
     def sign_in(self):
         method = METHODS[self.method.get()]
@@ -656,7 +736,7 @@ class DownloaderApp:
             password = os.environ.get("F1TV_PASSWORD") or os.environ.get("F1TV_PASS", "")
         remember, executable = self.remember.get(), self.browser_path.get().strip()
         self._run(
-            "Signing in…",
+            "Signing in...",
             lambda cancel: self.service.sign_in(
                 method,
                 username=username,
@@ -678,7 +758,7 @@ class DownloaderApp:
         self._refresh_actions()
 
     def sign_out(self):
-        self._run("Signing out…", lambda cancel: self.service.sign_out(), self._signed_out)
+        self._run("Signing out...", lambda cancel: self.service.sign_out(), self._signed_out)
 
     def _signed_out(self, result):
         self.password.set("")
@@ -688,7 +768,7 @@ class DownloaderApp:
 
     def install_browser(self):
         self._run(
-            "Setting up browser sign-in…",
+            "Setting up browser sign-in...",
             lambda cancel: install_browser_support(
                 cancel=cancel,
                 status=lambda text: self.events.put(("status", text)),
@@ -697,9 +777,12 @@ class DownloaderApp:
         )
 
     def inspect(self):
+        if len(self._channels()) != 1:
+            self.status.set("Select one feed to check its quality and audio.")
+            return
         channel = self._channel()
         self._run(
-            "Checking available streams…",
+            "Checking available streams...",
             lambda cancel: self.service.inspect(self.content, channel, cancel),
             self._streams_loaded,
         )
@@ -714,9 +797,12 @@ class DownloaderApp:
         self.status.set("Available quality and audio updated for the selected feed.")
 
     def copy_link(self):
+        if len(self._channels()) != 1:
+            self.status.set("Select one feed to copy its playback link.")
+            return
         channel = self._channel()
         self._run(
-            "Getting playback link…",
+            "Getting playback link...",
             lambda cancel: self.service.stream_url(self.content, channel),
             self._link_loaded,
         )
@@ -765,42 +851,88 @@ class DownloaderApp:
     def start_download(self):
         if self.busy or self.content is None:
             return
+        channels = self._channels()
+        if not channels:
+            self.status.set("Select at least one feed to download.")
+            return
         try:
             options = self._options()
         except F1TVError as error:
             messagebox.showerror("Check download settings", str(error), parent=self.root)
             return
         self.expected_seconds = options.duration or self.content.duration
+        self.queue_total = len(channels)
+        self.queue_index = 1
         self.progress.configure(
             value=0, mode="determinate" if self.expected_seconds else "indeterminate"
         )
         if not self.expected_seconds:
             self.progress.start(15)
-        self.progress_text.set("Preparing download…")
+        self.progress_text.set("Preparing download...")
         self._run(
-            "Preparing download…",
-            lambda cancel: self.service.download(
+            "Preparing download...",
+            lambda cancel: self.service.download_many(
                 self.content,
                 options,
+                channels,
                 cancel=cancel,
                 progress=lambda value: self.events.put(("progress", value)),
                 status=lambda text: self.events.put(("status", text)),
+                item_status=lambda update: self.events.put(("queue", update)),
             ),
-            self._downloaded,
+            self._downloads_done,
         )
 
-    def _downloaded(self, path):
-        self.last_output = path
+    def _show_queue_update(self, update):
+        row = self.queue_rows.get(update.channel)
+        if row is not None and self.feeds.exists(row):
+            self.feeds.set(row, "status", update.state)
+        self.queue_total = update.total
+        if update.state == "Downloading":
+            self.queue_index = update.index
+            self.progress_text.set(
+                f"Feed {update.index}/{update.total}: {update.channel or 'Main feed'}"
+            )
+            if self.expected_seconds:
+                self.progress.configure(value=(update.index - 1) / update.total * 100)
+        elif update.output is not None:
+            self.last_output = update.output
+            self.batch_completed.append(update.output)
+            self._append_log(f"Saved to {update.output}")
+        elif update.error:
+            self._append_log(f"{update.channel or 'Main feed'}: {update.error}")
+
+    def _downloads_done(self, result):
         self.progress.configure(mode="determinate", value=100)
-        self.progress_text.set("Download complete")
-        self.status.set(f"Saved {path.name}")
-        self._append_log(f"Saved to {path}")
+        completed, failed = len(result.completed), len(result.failed)
+        if failed:
+            summary = f"{completed} downloaded, {failed} failed. Completed files were kept."
+            self.progress_text.set(summary)
+            details = "\n".join(
+                f"{name or 'Main feed'}: {error}" for name, error in result.failed[:5]
+            )
+            self.status.set(summary)
+            if self.queue_total == 1:
+                messagebox.showerror("Download failed", details, parent=self.root)
+            else:
+                messagebox.showwarning(
+                    "Downloads finished", summary + "\n\n" + details, parent=self.root
+                )
+        else:
+            self.progress_text.set(
+                "Download complete" if completed == 1 else f"{completed} downloads complete"
+            )
+            self.status.set(
+                f"Saved {result.completed[0].name}"
+                if completed == 1
+                else f"Saved {completed} files."
+            )
         self._refresh_actions()
 
     def cancel(self):
         self.cancel_event.set()
         self.cancel_button.state(["disabled"])
-        self.status.set("Cancelling… Waiting for the current step to stop.")
+        self.status.set("Cancelling... Waiting for the current step to stop.")
 
     def apply_settings(self):
         try:

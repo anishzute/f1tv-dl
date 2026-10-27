@@ -12,14 +12,18 @@ import unittest
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 from test_models import FIXTURE, URL
 
+from f1tv_dl.auth import SessionCredentials, SessionManager, SessionStore
 from f1tv_dl.cli import main
 from f1tv_dl.desktop import DesktopService, DownloadOptions
+from f1tv_dl.errors import APIError
 from f1tv_dl.http import HttpClient
 from f1tv_dl.media import check_manifest, download, probe, select_streams
 from f1tv_dl.models import Content, ContentRef
+from f1tv_dl.web import WebClient
 
 
 class QuietHandler(SimpleHTTPRequestHandler):
@@ -305,3 +309,93 @@ class FFmpegIntegrationTests(unittest.TestCase):
         self.assertTrue(progress)
         self.assertGreater(progress[-1].seconds, 0)
         self.assertGreater(progress[-1].total_bytes, 0)
+
+    def test_queued_web_downloads_send_required_headers_and_browser_identity_to_media(self):
+        agent = "Mozilla/5.0 Chrome/154.0.0.0"
+        received = []
+
+        class WebPlaybackHandler(QuietHandler):
+            def do_GET(handler):
+                if handler.headers.get("User-Agent") != agent:
+                    handler.send_error(500)
+                    return
+                if "/CONTENT/PLAY" in handler.path:
+                    required = (
+                        "x-f1-device-info",
+                        "sessionid",
+                        "correlationid",
+                        "ascendontoken",
+                        "entitlementtoken",
+                    )
+                    if not all(handler.headers.get(name) for name in required):
+                        handler.send_error(500)
+                        return
+                    received.append({name: handler.headers.get(name) for name in required})
+                    channel = parse_qs(urlsplit(handler.path).query)["channelId"][0]
+                    payload = {
+                        "resultObj": {
+                            "streamType": "SDR_HD_CMAF",
+                            "channelId": channel,
+                            "tme": {
+                                "feeds": [
+                                    {
+                                        "metadata": {"channel_id": channel},
+                                        "url": f"http://127.0.0.1:{handler.server.server_port}/dash/master.mpd",
+                                    }
+                                ]
+                            },
+                        }
+                    }
+                    body = json.dumps(payload).encode()
+                    handler.send_response(200)
+                    handler.send_header("Content-Type", "application/json")
+                    handler.send_header("Content-Length", str(len(body)))
+                    handler.end_headers()
+                    handler.wfile.write(body)
+                else:
+                    if handler.headers.get("ascendontoken") or handler.headers.get(
+                        "entitlementtoken"
+                    ):
+                        handler.send_error(500)
+                        return
+                    super(WebPlaybackHandler, handler).do_GET()
+
+        server = ThreadingHTTPServer(
+            ("127.0.0.1", 0), functools.partial(WebPlaybackHandler, directory=str(self.root))
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            base = f"http://127.0.0.1:{server.server_port}"
+            with self.assertRaises(APIError) as caught:
+                HttpClient(retries=0).get_json(
+                    base + "/3.0/R/ENG/WEB_HLS/ALL/CONTENT/PLAY?channelId=1009",
+                    headers={"User-Agent": agent, "entitlementToken": "fixture-entitlement"},
+                )
+            self.assertEqual(caught.exception.status, 500)
+            service = DesktopService(session_path=self.root / "queue-session.json")
+            context = WebClient.create(agent)
+            service.sessions = SessionManager(
+                SessionStore(None),
+                lambda: None,
+                token=SessionCredentials("fixture-entitlement", "fixture-subscription", context),
+            )
+            content = Content.from_response(ContentRef.parse(URL), FIXTURE)
+            with patch("f1tv_dl.api.BASE_URL", base):
+                result = service.download_many(
+                    content,
+                    DownloadOptions(self.root / "web-queue", resolution="160x90", duration=1),
+                    ["VER", "HAM"],
+                )
+            self.assertEqual(result.failed, ())
+            self.assertEqual(len(result.completed), 2)
+            for output in result.completed:
+                self.assertGreater(output.stat().st_size, 0)
+                self.assertEqual(self.inspect_output(output)[0]["width"], 160)
+            self.assertEqual(received[0]["sessionid"], received[1]["sessionid"])
+            self.assertNotEqual(received[0]["correlationid"], received[1]["correlationid"])
+            self.assertFalse(list((self.root / "web-queue").glob("*.part*")))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
