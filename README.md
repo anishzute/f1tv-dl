@@ -42,7 +42,8 @@ A desktop display and FFmpeg are required; the CLI Docker image stays headless.
    The browser closes when authorization is received. The status bar shows the
    remaining session authorization step.
 2. On **Download**, paste your video URL and click **Load video**. Choose one or
-   more feeds from the table using Ctrl-click or Shift-click, or click **Select all**.
+   more feeds using the checkboxes beside them, or click **Select all**.
+   Click a feed to toggle its checkbox; keyboard users can focus a row and press Space.
    Channel listing also works before signing in.
 3. Select quality and audio. **Check streams** discovers the actual resolutions
    and languages when a single feed is selected. Settings apply to every selected
@@ -270,7 +271,7 @@ credentials or external requests are needed in CI.
 
 Desktop interaction tests run when Tk and a display are available. On headless
 Linux, use `xvfb-run -a python -m unittest discover -s tests -v`. They exercise
-graphical sign-in, multiple feed selection, Unicode names, audio settings, queue
+graphical sign-in, feed checkboxes with mouse and keyboard selection, Unicode names, audio settings, queue
 completion, cancellation, folder selection, error recovery, and sign-out. Media
 integration tests also check the desktop service against real locally generated
 streams and FFmpeg progress, including required playback headers and matching

@@ -265,13 +265,26 @@ class DownloaderApp:
         )
         tree_row = ttk.Frame(panel)
         tree_row.pack(fill="x")
+        self.feed_check_images = {}
+        for checked in (False, True):
+            for disabled in (False, True):
+                icon = tk.PhotoImage(master=self.root, width=18, height=18)
+                border = "#b8bbc2" if disabled else "#d92727" if checked else "#858a97"
+                icon.put(border, to=(2, 2, 16, 16))
+                icon.put(border if checked else "#ffffff", to=(3, 3, 15, 15))
+                if checked:
+                    for x, y in ((5, 8), (6, 9), (7, 10), (8, 9), (9, 8), (10, 7), (11, 6)):
+                        icon.put("#ffffff", to=(x, y, x + 2, y + 2))
+                self.feed_check_images[checked, disabled] = icon
         self.feeds = ttk.Treeview(
             tree_row,
             columns=("feed", "driver", "number", "status"),
-            show="headings",
+            show="tree headings",
             height=4,
-            selectmode="extended",
+            selectmode="none",
         )
+        self.feeds.heading("#0", text="Select")
+        self.feeds.column("#0", width=64, minwidth=64, stretch=False)
         for column, title, width in (
             ("feed", "Feed", 230),
             ("driver", "Driver", 370),
@@ -280,11 +293,13 @@ class DownloaderApp:
         ):
             self.feeds.heading(column, text=title)
             self.feeds.column(column, width=width, minwidth=70)
-        self.feeds.pack(side="left", fill="x", expand=True)
         scroll = ttk.Scrollbar(tree_row, orient="vertical", command=self.feeds.yview)
         scroll.pack(side="right", fill="y")
+        self.feeds.pack(side="left", fill="x", expand=True)
         self.feeds.configure(yscrollcommand=scroll.set)
         self.feeds.bind("<<TreeviewSelect>>", self._feed_changed)
+        self.feeds.bind("<Button-1>", self._feed_clicked)
+        self.feeds.bind("<space>", self._feed_space)
         selection_row = ttk.Frame(panel)
         selection_row.pack(fill="x", pady=(8, 0))
         ttk.Button(selection_row, text="Select all", command=self.select_all_feeds).pack(
@@ -294,7 +309,7 @@ class DownloaderApp:
         ttk.Label(selection_row, textvariable=self.selection_text).pack(side="left", padx=8)
         ttk.Label(
             panel,
-            text="Use Ctrl-click to select individual feeds or Shift-click for a range. "
+            text="Check the feeds you want to download. Press Space to toggle the focused feed. "
             "Each feed is saved as a separate file.",
             style="Muted.TLabel",
             wraplength=750,
@@ -504,6 +519,7 @@ class DownloaderApp:
     def _refresh_actions(self):
         if self.busy:
             return
+        self._sync_feed_checks()
         signed_in = self.service.signed_in
         self.account_status.set(
             "A session is ready. You can choose a video and download."
@@ -551,6 +567,7 @@ class DownloaderApp:
             for widget, _ in self.saved_states:
                 widget.state(["disabled"])
             self.cancel_button.state(["!disabled"])
+            self._sync_feed_checks()
         else:
             for widget, states in self.saved_states:
                 widget.state(["!disabled", "!readonly", *states])
@@ -683,13 +700,15 @@ class DownloaderApp:
         if content.channels:
             default = content.channels.index(content.select_channel())
             self.feeds.selection_set(str(default))
+            self.feeds.focus(str(default))
             self.feeds.see(str(default))
         else:
             self.feeds.insert("", "end", iid="main", values=("Main feed", "", "", ""))
             self.queue_rows[None] = "main"
             self.feeds.selection_set("main")
+            self.feeds.focus("main")
         self.status.set(
-            "Video loaded. Select one or more feeds to download."
+            "Video loaded. Check one or more feeds to download."
             if self.service.signed_in
             else "Video loaded. Sign in on the Account tab to download."
         )
@@ -704,6 +723,35 @@ class DownloaderApp:
         self.quality_combo.configure(values=["Best available"])
 
         self._refresh_actions()
+
+    def _sync_feed_checks(self):
+        checked = set(self.feeds.selection())
+        for row in self.feeds.get_children():
+            self.feeds.item(row, image=self.feed_check_images[row in checked, self.busy])
+
+    def _toggle_feed(self, row):
+        if self.busy or self.feeds.instate(["disabled"]) or not row:
+            return
+        self.feeds.focus(row)
+        if row in self.feeds.selection():
+            self.feeds.selection_remove(row)
+        else:
+            self.feeds.selection_add(row)
+        self._feed_changed()
+
+    def _feed_clicked(self, event):
+        if self.busy:
+            return "break"
+        row = self.feeds.identify_row(event.y)
+        if row and self.feeds.identify_region(event.x, event.y) in {"tree", "cell"}:
+            self.feeds.focus_set()
+            self._toggle_feed(row)
+            return "break"
+        return None
+
+    def _feed_space(self, event):
+        self._toggle_feed(self.feeds.focus())
+        return "break"
 
     def _channel(self):
         channels = self._channels()
@@ -720,10 +768,14 @@ class DownloaderApp:
         )
 
     def select_all_feeds(self):
+        if self.busy:
+            return
         self.feeds.selection_set(self.feeds.get_children())
         self._feed_changed()
 
     def clear_feeds(self):
+        if self.busy:
+            return
         self.feeds.selection_remove(self.feeds.selection())
         self._feed_changed()
 

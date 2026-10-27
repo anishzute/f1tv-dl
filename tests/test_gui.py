@@ -82,6 +82,16 @@ class DesktopInteractionTests(unittest.TestCase):
         self.app.load_button.invoke()
         self.wait_idle()
 
+    def click_feed(self, row):
+        self.app.feeds.see(row)
+        self.root.update()
+        bounds = self.app.feeds.bbox(row, "#0")
+        self.assertTrue(bounds, "The feed checkbox is not visible")
+        x, y, width, height = bounds
+        self.app.feeds.event_generate("<Button-1>", x=x + width // 2, y=y + height // 2)
+        self.app.feeds.event_generate("<ButtonRelease-1>", x=x + width // 2, y=y + height // 2)
+        self.root.update()
+
     def test_graphical_login_feed_selection_download_and_sign_out(self):
         self.assertTrue(self.app.download_button.instate(["disabled"]))
         self.login()
@@ -136,9 +146,10 @@ class DesktopInteractionTests(unittest.TestCase):
         self.login()
         self.load()
         indices = [str(i) for i, c in enumerate(self.content.channels) if c.title in ("VER", "HAM")]
-        self.app.feeds.selection_set(indices)
-        self.root.update()
-        self.assertEqual(str(self.app.feeds.cget("selectmode")), "extended")
+        self.app.clear_feeds()
+        for row in indices:
+            self.click_feed(row)
+        self.assertEqual(set(self.app._channels()), {"VER", "HAM"})
         self.assertTrue(self.app.inspect_button.instate(["disabled"]))
         self.assertTrue(self.app.link_button.instate(["disabled"]))
 
@@ -167,6 +178,32 @@ class DesktopInteractionTests(unittest.TestCase):
         self.app.clear_feeds()
         self.assertEqual(self.app._channels(), ())
         self.assertTrue(self.app.download_button.instate(["disabled"]))
+
+    def test_feed_checkbox_click_and_space_update_the_download_selection(self):
+        self.login()
+        self.load()
+        original = self.app._channels()
+        default = self.app.feeds.selection()[0]
+        self.click_feed(default)
+        self.assertEqual(self.app._channels(), ())
+        self.assertEqual(self.app.selection_text.get(), "0 feeds selected")
+        self.assertTrue(self.app.download_button.instate(["disabled"]))
+        self.app.feeds.focus_force()
+        self.root.update()
+        self.app.feeds.event_generate("<KeyPress-space>")
+        self.root.update()
+        self.assertEqual(self.app._channels(), original)
+        self.assertTrue(self.app.download_button.instate(["!disabled"]))
+
+    def test_main_feed_without_channels_has_a_working_checkbox(self):
+        self.login()
+        self.app._video_loaded(replace(self.content, channels=()))
+        self.root.update()
+        self.assertEqual(self.app._channels(), (None,))
+        self.click_feed("main")
+        self.assertEqual(self.app._channels(), ())
+        self.click_feed("main")
+        self.assertEqual(self.app._channels(), (None,))
 
     def test_cancelling_multiple_feeds_keeps_the_completed_file(self):
         self.login()
@@ -251,6 +288,15 @@ class DesktopInteractionTests(unittest.TestCase):
         self.app.start_download()
         self.assertTrue(started.wait(1))
         self.root.update()
+        checked = self.app._channels()
+        unchecked = next(
+            row for row in self.app.feeds.get_children() if row not in self.app.feeds.selection()
+        )
+        self.click_feed(unchecked)
+        self.app.feeds.focus_force()
+        self.app.feeds.event_generate("<KeyPress-space>")
+        self.root.update()
+        self.assertEqual(self.app._channels(), checked)
         self.app.cancel_button.invoke()
         self.wait_idle()
         self.assertIn("Cancelled", self.app.status.get())
