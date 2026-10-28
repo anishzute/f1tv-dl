@@ -551,16 +551,20 @@ class FFmpegIntegrationTests(unittest.TestCase):
                     api_calls.append(kwargs)
                     if "device=android_tv;" not in kwargs["headers"]["x-f1-device-info"]:
                         raise APIError("Playback authorization", 403)
+                    if str(kwargs["params"].get("channelId")) == "1025":
+                        raise APIError("Playback authorization", 404)
                     return {
                         "resultObj": {
                             "streamType": "HDR_UHD_CMAF",
+                            "channelId": 1033,
                             "url": self.base_url + "/wrong-default-feed.m3u8",
                             "tme": {
                                 "feeds": [
                                     {
-                                        "metadata": {"channel_id": kwargs["params"]["channelId"]},
+                                        "metadata": {"channel_id": 1033},
                                         "url": media_url,
-                                    }
+                                    },
+                                    {"metadata": {"channel_id": 1025}, "url": media_url},
                                 ]
                             },
                         }
@@ -615,11 +619,24 @@ class FFmpegIntegrationTests(unittest.TestCase):
             ),
         )
         cli_output = folder / "cli/2026-united-states-grand-prix-F1 LIVE.mp4"
-        for output in (cli_output, desktop_output):
+        international_output = service.download(
+            content,
+            DownloadOptions(
+                folder / "international",
+                channel="INTERNATIONAL",
+                resolution="3840x2160",
+                duration=10,
+                playback_profile="android-tv",
+            ),
+        )
+        for output in (cli_output, desktop_output, international_output):
             with self.subTest(output=output.name):
                 streams = self.inspect_output(output)
                 video = next(stream for stream in streams if stream["codec_type"] == "video")
-                self.assertEqual(sum(stream["codec_type"] == "audio" for stream in streams), 2)
+                self.assertEqual(
+                    sum(stream["codec_type"] == "audio" for stream in streams),
+                    1 if output == international_output else 2,
+                )
                 self.assertEqual((video["width"], video["height"]), (3840, 2160))
                 self.assertEqual(video["codec_name"], "hevc")
                 self.assertEqual(video["pix_fmt"], "yuv420p10le")
@@ -645,7 +662,10 @@ class FFmpegIntegrationTests(unittest.TestCase):
                     timeout=30,
                 )
                 self.assertEqual(result.returncode, 0, "The 4K output must decode without errors")
-        self.assertEqual(len(api_calls), 4)
+        self.assertEqual(
+            [call["params"].get("channelId") for call in api_calls],
+            ["1033", None, "1033", None, None],
+        )
         self.assertIn("device=web;", credentials.web_client.device_info)
 
     def test_desktop_download_has_real_progress_and_two_audio_tracks(self):

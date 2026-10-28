@@ -63,6 +63,11 @@ and choose a separate sample folder. Leave it blank afterward for full downloads
 Changing the playback profile resets the quality choices; click **Check streams**
 again to refresh them. The profile applies to every selected feed, playback links,
 and any extra international audio track.
+INTERNATIONAL uses the content-level playback route advertised by F1 TV; its feed
+ID is used to select the returned manifest. If that route returns HTTP 404, the
+app tries the default feed's playback request once and selects INTERNATIONAL from
+its feed list. A response containing only another feed is rejected. This also
+applies to extra international audio and manifest checks.
 
 **Settings** provides audio offset, sample duration, network timeout, metadata
 country/entitlement, cache location, and an optional installed Chromium path.

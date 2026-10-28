@@ -109,7 +109,7 @@ class ManifestCheckTests(unittest.TestCase):
         calls = self.http.get_json.call_args_list
         self.assertEqual(len(calls), 3)
         for call in calls:
-            self.assertEqual(call.kwargs["params"]["channelId"], "1025")
+            self.assertNotIn("channelId", call.kwargs["params"])
             self.assertEqual(call.kwargs["headers"]["ascendontoken"], "private-subscription")
             self.assertEqual(call.kwargs["headers"]["entitlementToken"], "private-entitlement")
         self.assertIn("device=web;", calls[0].kwargs["headers"]["x-f1-device-info"])
@@ -171,6 +171,28 @@ class ManifestCheckTests(unittest.TestCase):
         self.manifests({MASTER_URL: "#EXTM3U\n"})
         self.assertTrue(self.check().inspected)
         self.assertEqual(self.http.open_stream.call_count, 3)
+
+    def test_international_diagnostics_use_default_feed_list_if_content_route_is_missing(self):
+        def authorize(url, **kwargs):
+            if "channelId" not in kwargs["params"]:
+                raise APIError("Playback authorization", 404)
+            self.assertEqual(kwargs["params"]["channelId"], "1033")
+            return {
+                "resultObj": {
+                    "channelId": 1033,
+                    "streamType": "HDR_UHD_CMAF",
+                    "url": "https://cdn.example/wrong.m3u8",
+                    "tme": {"feeds": [{"metadata": {"channel_id": 1025}, "url": MASTER_URL}]},
+                }
+            }
+
+        self.http.get_json.side_effect = authorize
+        self.manifests({MASTER_URL: "#EXTM3U\n"})
+        report = self.check()
+        self.assertTrue(all(profile.manifests_checked == 1 for profile in report.profiles))
+        self.assertTrue(all(profile.error is None for profile in report.profiles))
+        self.assertEqual(self.http.get_json.call_count, 6)
+        self.assertNotIn("private-", report.to_json())
 
     def test_missing_selected_tme_feed_does_not_inspect_default_feed(self):
         self.http.get_json.return_value = {

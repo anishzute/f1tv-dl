@@ -236,7 +236,7 @@ class APITests(unittest.TestCase):
         self.assertEqual(playback.stream_type, "HLS")
         call = self.http.get_json.call_args
         self.assertIn("/3.0/R/ENG/WEB_HLS/", call.args[0])
-        self.assertEqual(call.kwargs["params"]["channelId"], "1025")
+        self.assertNotIn("channelId", call.kwargs["params"])
         headers = call.kwargs["headers"]
         self.assertEqual(headers["ascendontoken"], "subscription")
         self.assertEqual(headers["entitlementToken"], "entitlement")
@@ -350,7 +350,7 @@ class APITests(unittest.TestCase):
         with self.assertRaisesRegex(F1TVError, "selected feed"):
             self.client.playback(self.content, self.content.select_channel("VER"), sessions)
 
-    def test_web_international_feed_uses_the_advertised_channel_id(self):
+    def test_web_international_uses_content_route_and_explicit_returned_feed_id(self):
         channel = self.content.select_channel("INTERNATIONAL")
         self.assertIsNone(channel.channel_id)
         self.assertIsNotNone(channel.web_channel_id)
@@ -360,22 +360,122 @@ class APITests(unittest.TestCase):
         self.http.get_json.return_value = {
             "resultObj": {
                 "streamType": "SDR_HD_CMAF",
-                "channelId": channel.web_channel_id,
+                "channelId": 1033,
                 "tme": {
                     "feeds": [
                         {
+                            "metadata": {"channel_id": 1033},
+                            "url": "https://cdn.test/wrong-default.m3u8",
+                        },
+                        {
                             "metadata": {"channel_id": channel.web_channel_id},
                             "url": "https://cdn.test/international.m3u8",
-                        }
+                        },
                     ]
                 },
             }
         }
-        result = self.client.playback(self.content, channel, sessions)
-        self.assertEqual(result.url, "https://cdn.test/international.m3u8")
-        self.assertEqual(
-            self.http.get_json.call_args.kwargs["params"]["channelId"], channel.web_channel_id
+        payload = self.http.get_json.return_value
+
+        def authorize(url, **kwargs):
+            if "channelId" in kwargs["params"]:
+                raise APIError("Playback authorization", 404)
+            return payload
+
+        self.http.get_json.side_effect = authorize
+        for profile in ("web", "android-tv"):
+            with self.subTest(profile=profile):
+                self.http.get_json.reset_mock()
+                result = self.client.playback(self.content, channel, sessions, profile=profile)
+                self.assertEqual(result.url, "https://cdn.test/international.m3u8")
+                self.assertNotIn("channelId", self.http.get_json.call_args.kwargs["params"])
+                self.assertEqual(self.http.get_json.call_count, 1)
+
+    def test_missing_international_content_route_uses_default_feed_list_once(self):
+        sessions = SessionManager(
+            SessionStore(None),
+            Mock(),
+            token=SessionCredentials("entitlement", "subscription"),
         )
+        channel = self.content.select_channel("INTERNATIONAL")
+        self.http.get_json.side_effect = [
+            APIError("Playback authorization", 404),
+            {
+                "resultObj": {
+                    "streamType": "HDR_UHD_CMAF",
+                    "channelId": 1033,
+                    "url": "https://cdn.test/wrong-default.m3u8",
+                    "tme": {
+                        "feeds": [
+                            {
+                                "metadata": {"channel_id": 1033},
+                                "url": "https://cdn.test/wrong.m3u8",
+                            },
+                            {
+                                "metadata": {"channel_id": 1025},
+                                "url": "https://cdn.test/international.m3u8",
+                            },
+                        ]
+                    },
+                }
+            },
+        ]
+        playback = self.client.playback(self.content, channel, sessions, profile="android-tv")
+        self.assertEqual(playback.url, "https://cdn.test/international.m3u8")
+        calls = self.http.get_json.call_args_list
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("channelId", calls[0].kwargs["params"])
+        self.assertEqual(calls[1].kwargs["params"]["channelId"], "1033")
+        self.assertNotEqual(
+            calls[0].kwargs["headers"]["correlationid"],
+            calls[1].kwargs["headers"]["correlationid"],
+        )
+        self.assertEqual(
+            calls[0].kwargs["headers"]["sessionid"],
+            calls[1].kwargs["headers"]["sessionid"],
+        )
+        for call in calls:
+            self.assertIn("device=android_tv;", call.kwargs["headers"]["x-f1-device-info"])
+
+    def test_content_route_never_substitutes_a_top_level_default_url(self):
+        sessions = SessionManager(
+            SessionStore(None),
+            Mock(),
+            token=SessionCredentials("entitlement", "subscription"),
+        )
+        self.http.get_json.return_value = {
+            "resultObj": {
+                "channelId": 1033,
+                "streamType": "HDR_UHD_CMAF",
+                "url": "https://cdn.test/wrong.m3u8",
+            }
+        }
+        with self.assertRaisesRegex(F1TVError, "selected feed"):
+            self.client.playback(
+                self.content, self.content.select_channel("INTERNATIONAL"), sessions
+            )
+
+    def test_content_route_fallback_is_limited_to_404_and_never_loops(self):
+        sessions = SessionManager(
+            SessionStore(None),
+            Mock(),
+            token=SessionCredentials("entitlement", "subscription"),
+        )
+        for status, channel, expected_calls in (
+            (403, "INTERNATIONAL", 1),
+            (451, "INTERNATIONAL", 1),
+            (500, "INTERNATIONAL", 1),
+            (404, "VER", 1),
+            (404, "INTERNATIONAL", 2),
+        ):
+            with self.subTest(status=status, channel=channel):
+                self.http.get_json.reset_mock()
+                self.http.get_json.side_effect = APIError("Playback authorization", status)
+                with self.assertRaises(F1TVError):
+                    self.client.playback(
+                        self.content, self.content.select_channel(channel), sessions
+                    )
+                self.assertEqual(self.http.get_json.call_count, expected_calls)
 
     def test_401_refreshes_once(self):
         self.http.get_json.side_effect = [APIError("Playback", 401), self.playback]

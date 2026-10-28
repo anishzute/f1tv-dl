@@ -10,8 +10,7 @@ from http.client import HTTPException
 from urllib.parse import urljoin, urlsplit
 
 from . import __version__
-from .api import result_object, select_playback_url
-from .config import BASE_URL
+from .api import request_playback, result_object, select_playback_url
 from .errors import APIError, AuthenticationError, F1TVError, OperationCancelled
 from .http import validate_media_url
 from .web import WebClient
@@ -312,10 +311,6 @@ def check_manifests(http, content, channel, sessions, *, cancel=None, status=Non
             "or use --login-method browser --no-cache in the CLI."
         )
     client = sessions.web_client or WebClient.create()
-    selected = channel.web_channel_id if channel is not None else None
-    params = {"contentId": content.ref.id, "player": "player_tm"}
-    if selected is not None:
-        params["channelId"] = selected
     report = ManifestReport(content.ref.id, channel.title if channel else "Main feed", [])
     for key, label, platform, android in PROFILES:
         check_cancel(cancel)
@@ -330,11 +325,13 @@ def check_manifests(http, content, channel, sessions, *, cancel=None, status=Non
             "entitlementToken": token,
         }
         try:
-            payload = http.get_json(
-                BASE_URL + f"/3.0/R/ENG/{platform}/ALL/CONTENT/PLAY",
-                params=params,
+            payload, selected = request_playback(
+                http,
+                content,
+                channel,
                 headers=headers,
-                operation="Playback authorization",
+                web_session=True,
+                platform=platform,
             )
             profile.http_status = 200
             result = result_object(payload)

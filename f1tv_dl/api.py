@@ -7,7 +7,7 @@ from .config import BASE_URL, Settings
 from .errors import APIError, AuthenticationError, DRMError, F1TVError
 from .http import validate_media_url
 from .models import Content, ContentRef
-from .web import WebClient, validate_playback_profile
+from .web import WebClient, request_id, validate_playback_profile
 
 
 @dataclass(frozen=True)
@@ -27,6 +27,57 @@ def result_object(payload):
     return result
 
 
+def playback_parameters(content, channel, *, web_session):
+    """Keep the advertised request route separate from the returned TME feed ID."""
+    params = {"contentId": content.ref.id}
+    selected = channel.channel_id if channel is not None else None
+    if web_session:
+        params["player"] = "player_tm"
+        if channel is not None and channel.web_channel_id is not None:
+            selected = channel.web_channel_id
+    # INTERNATIONAL has a feed ID for TME selection, but its advertised playback URL
+    # deliberately omits channelId. Sending that feed ID to PLAY can return HTTP 404.
+    if channel is not None and channel.channel_id is not None:
+        params["channelId"] = selected
+    return params, selected
+
+
+def request_playback(http, content, channel, *, headers, web_session, platform=None):
+    params, selected = playback_parameters(content, channel, web_session=web_session)
+    platform = platform or ("WEB_HLS" if web_session else "BIG_SCREEN_HLS")
+    version = "3.0" if web_session else "2.0"
+    url = BASE_URL + f"/{version}/R/ENG/{platform}/ALL/CONTENT/PLAY"
+    try:
+        payload = http.get_json(
+            url,
+            params=params,
+            headers=headers,
+            operation="Playback authorization",
+        )
+    except APIError as error:
+        # The recorded browser resolves all feeds through the advertised default feed.
+        # Some servers do not expose the content-level route. Retry only that missing
+        # route, retaining INTERNATIONAL's selected ID when reading the returned feeds.
+        default = content.select_channel()
+        fallback = default.web_channel_id if default is not None else None
+        if not (
+            error.status == 404
+            and web_session
+            and "channelId" not in params
+            and selected is not None
+            and fallback is not None
+            and str(fallback) != str(selected)
+        ):
+            raise
+        payload = http.get_json(
+            url,
+            params={**params, "channelId": fallback},
+            headers={**headers, "correlationid": request_id()},
+            operation="Playback authorization",
+        )
+    return payload, selected
+
+
 def select_playback_url(result, selected):
     """Use the requested Tiled Media feed even when a top-level default URL is present."""
     tme = result.get("tme")
@@ -40,7 +91,8 @@ def select_playback_url(result, selected):
             and str(metadata.get("channel_id")) == str(selected)
         ):
             return feed.get("url")
-    if feeds:
+    returned = result.get("channelId")
+    if feeds or (selected is not None and returned is not None and str(selected) != str(returned)):
         raise F1TVError("F1 TV returned no manifest for the selected feed.")
     return result.get("url")
 
@@ -67,7 +119,6 @@ class F1TVClient:
 
     def playback(self, content: Content, channel, sessions, *, profile="web") -> Playback:
         validate_playback_profile(profile)
-        params = {"contentId": content.ref.id}
         token = sessions.get()
         for attempt in range(2):
             subscription = getattr(sessions, "subscription_token", None)
@@ -77,14 +128,6 @@ class F1TVClient:
                     "Android TV playback requires Browser sign-in. Sign in on the Account tab, "
                     "or use --login-method browser --no-cache in the CLI."
                 )
-            if channel is not None:
-                channel_id = channel.channel_id
-                if web_session and channel.web_channel_id is not None:
-                    channel_id = channel.web_channel_id
-                if channel_id is not None:
-                    params["channelId"] = channel_id
-                else:
-                    params.pop("channelId", None)
             headers = {"entitlementToken": token}
             if web_session:
                 client = getattr(sessions, "web_client", None)
@@ -94,20 +137,13 @@ class F1TVClient:
                     )
                 )
                 headers["ascendontoken"] = subscription
-                params["player"] = "player_tm"
-            else:
-                params.pop("player", None)
             try:
-                payload = self.http.get_json(
-                    BASE_URL
-                    + (
-                        "/3.0/R/ENG/WEB_HLS/ALL/CONTENT/PLAY"
-                        if web_session
-                        else "/2.0/R/ENG/BIG_SCREEN_HLS/ALL/CONTENT/PLAY"
-                    ),
-                    params=params,
+                payload, selected = request_playback(
+                    self.http,
+                    content,
+                    channel,
                     headers=headers,
-                    operation="Playback authorization",
+                    web_session=web_session,
                 )
                 break
             except APIError as error:
@@ -123,11 +159,7 @@ class F1TVClient:
         result = result_object(payload)
         if result.get("drmType") or result.get("drmToken") or result.get("isDrmProtected"):
             raise DRMError()
-        url = (
-            select_playback_url(result, params.get("channelId"))
-            if web_session
-            else result.get("url")
-        )
+        url = select_playback_url(result, selected) if web_session else result.get("url")
         if not isinstance(url, str) or not url:
             raise F1TVError("F1 TV did not return a playback URL.")
         kind = str(result.get("streamType") or "").upper()
