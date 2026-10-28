@@ -25,6 +25,7 @@ except ImportError:
     tk = None
 
 METHODS = {"Browser sign-in": "browser", "Email and password": "password", "Session token": "token"}
+PROFILES = {"Web (standard)": "web", "Android TV (4K / HDR)": "android-tv"}
 LANGUAGES = {
     "English": "eng",
     "Dutch": "nld",
@@ -56,6 +57,11 @@ def clock_time(seconds):
 
 def friendly_error(error):
     text = str(error)
+    if text.startswith("Android TV playback requires Browser sign-in."):
+        return (
+            "Android TV playback needs a browser session. Sign in using Browser sign-in "
+            "on the Account tab, then try again."
+        )
     if "rejected password login" in text:
         return (
             "F1 TV rejected this sign-in. Check your email and password, or choose "
@@ -121,6 +127,7 @@ class DownloaderApp:
         self.token = tk.StringVar()
         self.remember = tk.BooleanVar(value=True)
         self.resolution = tk.StringVar(value="Best available")
+        self.playback_profile = tk.StringVar(value="Web (standard)")
         self.audio = tk.StringVar(value="English")
         self.international = tk.StringVar(value="None")
         self.offset = tk.StringVar(value="00:00:00.000")
@@ -549,6 +556,25 @@ class DownloaderApp:
             actions, text="Check streams", command=self.inspect, style="Compact.TButton"
         )
         self.inspect_button.pack(side="right", padx=8)
+        profile_row = ttk.Frame(quality)
+        profile_row.pack(fill="x", pady=(0, 12))
+        profile_row.columnconfigure(2, weight=1)
+        ttk.Label(profile_row, text="Playback profile").grid(row=0, column=0, sticky="w")
+        self.profile_combo = ttk.Combobox(
+            profile_row,
+            textvariable=self.playback_profile,
+            values=list(PROFILES),
+            state="readonly",
+            width=25,
+        )
+        self.profile_combo.grid(row=0, column=1, sticky="w", padx=(12, 16))
+        self.profile_combo.bind("<<ComboboxSelected>>", self._profile_changed)
+        ttk.Label(
+            profile_row,
+            text="UHD / HDR when available. Requires browser sign-in.",
+            style="Muted.TLabel",
+            wraplength=220,
+        ).grid(row=0, column=2, sticky="w")
         options = ttk.Frame(quality)
         options.pack(fill="x")
         options.columnconfigure((0, 1, 2), weight=1)
@@ -602,6 +628,14 @@ class DownloaderApp:
             )
         ttk.Checkbutton(file_row, text="Replace existing file", variable=self.overwrite).pack(
             side="left", padx=10
+        )
+        sample_row = ttk.Frame(save)
+        sample_row.pack(fill="x", pady=(12, 0))
+        ttk.Label(sample_row, text="Sample length (seconds)").pack(side="left")
+        self.sample_entry = ttk.Entry(sample_row, textvariable=self.sample, width=8)
+        self.sample_entry.pack(side="left", padx=12)
+        ttk.Label(sample_row, text="Leave blank for the full video.", style="Muted.TLabel").pack(
+            side="left",
         )
         self.progress = ttk.Progressbar(save, mode="determinate", maximum=100)
         self.progress.pack(fill="x", pady=(18, 10))
@@ -967,6 +1001,14 @@ class DownloaderApp:
 
         self._refresh_actions()
 
+    def _profile_changed(self, event=None):
+        if self.busy:
+            return
+        self._feed_changed()
+        self.status.set(
+            "Playback profile updated. Click Check streams to refresh available quality."
+        )
+
     def _sync_feed_checks(self):
         checked = set(self.feeds.selection())
         for row in self.feeds.get_children():
@@ -1078,9 +1120,10 @@ class DownloaderApp:
             self.status.set("Select one feed to check its quality and audio.")
             return
         channel = self._channel()
+        profile = PROFILES[self.playback_profile.get()]
         self._run(
             "Checking available streams...",
-            lambda cancel: self.service.inspect(self.content, channel, cancel),
+            lambda cancel: self.service.inspect(self.content, channel, cancel, profile=profile),
             self._streams_loaded,
         )
 
@@ -1201,9 +1244,10 @@ class DownloaderApp:
             self.status.set("Select one feed to copy its playback link.")
             return
         channel = self._channel()
+        profile = PROFILES[self.playback_profile.get()]
         self._run(
             "Getting playback link...",
-            lambda cancel: self.service.stream_url(self.content, channel),
+            lambda cancel: self.service.stream_url(self.content, channel, profile=profile),
             self._link_loaded,
         )
 
@@ -1244,6 +1288,7 @@ class DownloaderApp:
             format=self.format.get(),
             duration=duration,
             overwrite=self.overwrite.get(),
+            playback_profile=PROFILES[self.playback_profile.get()],
         )
         options.validate()
         return options

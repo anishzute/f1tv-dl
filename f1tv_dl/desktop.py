@@ -18,6 +18,7 @@ from .media import download, probe, require_binary, stop_process
 from .media import select_streams as select_media
 from .models import safe_filename
 from .relay import HLSRelay
+from .web import validate_playback_profile
 
 
 @dataclass(frozen=True)
@@ -31,8 +32,10 @@ class DownloadOptions:
     format: str = "mp4"
     duration: float | None = None
     overwrite: bool = False
+    playback_profile: str = "web"
 
     def validate(self):
+        validate_playback_profile(self.playback_profile)
         if self.resolution != "best" and not re.fullmatch(r"[1-9]\d*x[1-9]\d*", self.resolution):
             raise F1TVError("Choose Best available or enter a resolution such as 1920x1080.")
         if self.format not in {"mp4", "ts"}:
@@ -136,8 +139,13 @@ class DesktopService:
     def load_video(self, url):
         return self.client.content(url)
 
-    def stream_url(self, content, channel=None):
-        return self.client.playback(content, content.select_channel(channel), self.sessions).url
+    def stream_url(self, content, channel=None, *, profile="web"):
+        return self.client.playback(
+            content,
+            content.select_channel(channel),
+            self.sessions,
+            profile=profile,
+        ).url
 
     def check_manifest(self, content, channel=None, cancel=None, status=None):
         return check_manifests(
@@ -165,8 +173,8 @@ class DesktopService:
             self.http, headers=client.media_headers() if client is not None else None, cancel=cancel
         )
 
-    def inspect(self, content, channel=None, cancel=None):
-        url = self.stream_url(content, channel)
+    def inspect(self, content, channel=None, cancel=None, *, profile="web"):
+        url = self.stream_url(content, channel, profile=profile)
         check_cancel(cancel)
         with self.media_relay(cancel) as relay:
             url = relay.prepare(url, self.manifest(url))
@@ -212,7 +220,7 @@ class DesktopService:
         check_cancel(cancel)
         if status:
             status("Checking the selected video and audio...")
-        url = self.stream_url(content, options.channel)
+        url = self.stream_url(content, options.channel, profile=options.playback_profile)
         with self.media_relay(cancel) as relay:
             url = relay.prepare(url, self.manifest(url))
             check_cancel(cancel)
@@ -226,7 +234,11 @@ class DesktopService:
             secondary = None
             if international is not None:
                 check_cancel(cancel)
-                secondary_url = self.stream_url(content, "INTERNATIONAL")
+                secondary_url = self.stream_url(
+                    content,
+                    "INTERNATIONAL",
+                    profile=options.playback_profile,
+                )
                 secondary_url = relay.prepare(
                     secondary_url,
                     self.manifest(secondary_url, operation="International manifest lookup"),

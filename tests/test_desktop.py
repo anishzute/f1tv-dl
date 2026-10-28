@@ -151,6 +151,7 @@ class DesktopServiceTests(unittest.TestCase):
             DownloadOptions(self.root, duration=float("nan")),
             DownloadOptions(self.root, duration=-1),
             DownloadOptions(self.root, format="avi"),
+            DownloadOptions(self.root, playback_profile="invalid"),
         ):
             with self.subTest(options=options), self.assertRaises(F1TVError):
                 options.validate()
@@ -162,7 +163,7 @@ class DesktopServiceTests(unittest.TestCase):
         )
         result = self.service.download_many(
             self.content,
-            DownloadOptions(self.root),
+            DownloadOptions(self.root, playback_profile="android-tv"),
             ["VER", "HAM", "ver"],
             item_status=updates.append,
         )
@@ -171,6 +172,12 @@ class DesktopServiceTests(unittest.TestCase):
         )
         self.assertEqual(result.completed, (self.root / "VER.mp4", self.root / "HAM.mp4"))
         self.assertEqual(result.failed, ())
+        self.assertTrue(
+            all(
+                call.args[1].playback_profile == "android-tv"
+                for call in self.service.download.call_args_list
+            )
+        )
         self.assertEqual(
             [u.state for u in updates],
             ["Queued", "Queued", "Downloading", "Complete", "Downloading", "Complete"],

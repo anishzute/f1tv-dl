@@ -4,10 +4,10 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from .config import BASE_URL, Settings
-from .errors import APIError, DRMError, F1TVError
+from .errors import APIError, AuthenticationError, DRMError, F1TVError
 from .http import validate_media_url
 from .models import Content, ContentRef
-from .web import WebClient
+from .web import WebClient, validate_playback_profile
 
 
 @dataclass(frozen=True)
@@ -25,6 +25,24 @@ def result_object(payload):
     if not isinstance(result, dict):
         raise F1TVError("F1 TV returned an unexpected response.")
     return result
+
+
+def select_playback_url(result, selected):
+    """Use the requested Tiled Media feed even when a top-level default URL is present."""
+    tme = result.get("tme")
+    feeds = tme.get("feeds", []) if isinstance(tme, dict) else []
+    selected = selected if selected is not None else result.get("channelId")
+    for feed in feeds if isinstance(feeds, list) else []:
+        metadata = feed.get("metadata") if isinstance(feed, dict) else None
+        if (
+            selected is not None
+            and isinstance(metadata, dict)
+            and str(metadata.get("channel_id")) == str(selected)
+        ):
+            return feed.get("url")
+    if feeds:
+        raise F1TVError("F1 TV returned no manifest for the selected feed.")
+    return result.get("url")
 
 
 class F1TVClient:
@@ -47,12 +65,18 @@ class F1TVClient:
         result_object(payload)
         return Content.from_response(ref, payload)
 
-    def playback(self, content: Content, channel, sessions) -> Playback:
+    def playback(self, content: Content, channel, sessions, *, profile="web") -> Playback:
+        validate_playback_profile(profile)
         params = {"contentId": content.ref.id}
         token = sessions.get()
         for attempt in range(2):
             subscription = getattr(sessions, "subscription_token", None)
             web_session = isinstance(subscription, str) and bool(subscription)
+            if profile == "android-tv" and not web_session:
+                raise AuthenticationError(
+                    "Android TV playback requires Browser sign-in. Sign in on the Account tab, "
+                    "or use --login-method browser --no-cache in the CLI."
+                )
             if channel is not None:
                 channel_id = channel.channel_id
                 if web_session and channel.web_channel_id is not None:
@@ -65,7 +89,9 @@ class F1TVClient:
             if web_session:
                 client = getattr(sessions, "web_client", None)
                 headers.update(
-                    (client if isinstance(client, WebClient) else WebClient.create()).headers()
+                    (client if isinstance(client, WebClient) else WebClient.create()).headers(
+                        profile
+                    )
                 )
                 headers["ascendontoken"] = subscription
                 params["player"] = "player_tm"
@@ -97,20 +123,11 @@ class F1TVClient:
         result = result_object(payload)
         if result.get("drmType") or result.get("drmToken") or result.get("isDrmProtected"):
             raise DRMError()
-        url = result.get("url")
-        if not url and web_session:
-            tme = result.get("tme")
-            feeds = tme.get("feeds", []) if isinstance(tme, dict) else []
-            selected = params.get("channelId", result.get("channelId"))
-            for feed in feeds if isinstance(feeds, list) else []:
-                metadata = feed.get("metadata") if isinstance(feed, dict) else None
-                if (
-                    selected is not None
-                    and isinstance(metadata, dict)
-                    and str(metadata.get("channel_id")) == str(selected)
-                ):
-                    url = feed.get("url")
-                    break
+        url = (
+            select_playback_url(result, params.get("channelId"))
+            if web_session
+            else result.get("url")
+        )
         if not isinstance(url, str) or not url:
             raise F1TVError("F1 TV did not return a playback URL.")
         kind = str(result.get("streamType") or "").upper()

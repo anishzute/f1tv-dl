@@ -226,6 +226,7 @@ class CLITests(unittest.TestCase):
             ["--timeout", "nan"],
             ["--itsoffset=00:99:00.000"],
             ["--channel-list", "--stream-url"],
+            ["--playback-profile", "invalid"],
         ):
             with self.subTest(option=option), contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as caught:

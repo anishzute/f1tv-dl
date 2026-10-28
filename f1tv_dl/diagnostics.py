@@ -10,7 +10,7 @@ from http.client import HTTPException
 from urllib.parse import urljoin, urlsplit
 
 from . import __version__
-from .api import result_object
+from .api import result_object, select_playback_url
 from .config import BASE_URL
 from .errors import APIError, AuthenticationError, F1TVError, OperationCancelled
 from .http import validate_media_url
@@ -301,19 +301,6 @@ def inspect_manifests(http, url, report, *, headers, cancel=None):
         raise F1TVError("Reached the six-manifest inspection limit; results are partial.")
 
 
-def playback_url(result, selected):
-    tme = result.get("tme")
-    feeds = tme.get("feeds", []) if isinstance(tme, dict) else []
-    selected = selected if selected is not None else result.get("channelId")
-    for feed in feeds if isinstance(feeds, list) else []:
-        metadata = feed.get("metadata") if isinstance(feed, dict) else None
-        if isinstance(metadata, dict) and str(metadata.get("channel_id")) == str(selected):
-            return feed.get("url")
-    if feeds:
-        raise F1TVError("F1 TV returned no manifest for the selected feed.")
-    return result.get("url")
-
-
 def check_manifests(http, content, channel, sessions, *, cancel=None, status=None):
     """Compare web playback with experimental Android TV device/endpoint probes."""
     check_cancel(cancel)
@@ -337,18 +324,11 @@ def check_manifests(http, content, channel, sessions, *, cancel=None, status=Non
         check_cancel(cancel)
         profile = ProfileReport(key, label)
         report.profiles.append(profile)
-        headers = {**client.headers(), "ascendontoken": subscription, "entitlementToken": token}
-        if android:
-            headers["x-f1-device-info"] = ";".join(
-                [
-                    "device=android_tv",
-                    *(
-                        part
-                        for part in client.device_info.split(";")
-                        if not part.startswith("device=")
-                    ),
-                ]
-            )
+        headers = {
+            **client.headers("android-tv" if android else "web"),
+            "ascendontoken": subscription,
+            "entitlementToken": token,
+        }
         try:
             payload = http.get_json(
                 BASE_URL + f"/3.0/R/ENG/{platform}/ALL/CONTENT/PLAY",
@@ -368,7 +348,7 @@ def check_manifests(http, content, channel, sessions, *, cancel=None, status=Non
             )
             if result.get("drmType"):
                 add_unique(profile.drm_systems, [drm_name(result["drmType"])])
-            url = playback_url(result, selected)
+            url = select_playback_url(result, selected)
             if not isinstance(url, str) or not url:
                 raise F1TVError("F1 TV returned no manifest URL for the selected feed.")
             inspect_manifests(http, url, profile, headers=client.media_headers(), cancel=cancel)

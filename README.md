@@ -45,7 +45,10 @@ A desktop display and FFmpeg are required; the CLI Docker image stays headless.
    more feeds using the checkboxes beside them, or click **Select all**.
    Click a feed to toggle its checkbox; keyboard users can focus a row and press Space.
    Channel listing also works before signing in.
-3. Select quality and audio. **Check streams** discovers the actual resolutions
+3. Select a **Playback profile**, quality, and audio. **Web (standard)** is the
+   default. **Android TV (4K / HDR)** requests the UHD/HDR manifest when the feed
+   and account offer it; use **Browser sign-in** for this profile.
+   **Check streams** discovers the actual resolutions
    and languages when a single feed is selected. Settings apply to every selected
    feed. Extra international audio is optional.
 4. Click **Choose folder**, select MP4 or TS, and click **Download video** (or
@@ -54,6 +57,12 @@ A desktop display and FFmpeg are required; the CLI Docker image stays headless.
    output size, and download speed. A failed feed does not stop the remaining queue.
    **Cancel** stops the queue and removes the current incomplete video, keeping
    completed files. **Open folder** shows a finished file.
+
+For a short test, enter `10` in **Sample length (seconds)** in **Save your video**
+and choose a separate sample folder. Leave it blank afterward for full downloads.
+Changing the playback profile resets the quality choices; click **Check streams**
+again to refresh them. The profile applies to every selected feed, playback links,
+and any extra international audio track.
 
 **Settings** provides audio offset, sample duration, network timeout, metadata
 country/entitlement, cache location, and an optional installed Chromium path.
@@ -142,6 +151,47 @@ after upgrading to 1.3 to capture this browser context for an existing session.
 Legacy entitlement-only sessions remain readable.
 Resolution choices come from the authorized manifest; using Chromium for sign-in
 alone does not guarantee 4K playback or downloads.
+
+## Download a 4K sample
+
+Use the `android-tv` playback profile with a browser session to request the same
+Android TV device header as the manifest check. This uses the `WEB_HLS` endpoint;
+it does not require an Android emulator or change the browser sign-in flow.
+The default `web` profile is still available. UHD availability can differ by feed.
+
+After updating and installing the browser extra, run this in WSL:
+
+```sh
+python -m f1tv_dl \
+  'https://f1tv.formula1.com/detail/1000010409/2026-united-states-grand-prix' \
+  --login-method browser --playback-profile android-tv \
+  --channel 'F1 LIVE' --video-size 3840x2160 \
+  --duration 10 --output-directory ./4k-sample
+```
+
+If an old password/token-only session is cached, add `--no-cache` to sign in through
+Chromium. Unset `F1TV_TOKEN` if it is set and you want browser sign-in.
+An explicit `3840x2160` selection fails if that size is unavailable; it does not
+silently download 1080p. Omit `--video-size` to select the best available resolution.
+Omit `--duration` and choose a different output folder to download the full video.
+
+Check the saved file's actual codec, dimensions, pixel format, and HDR metadata:
+
+```sh
+ffprobe -v error -select_streams v:0 \
+  -show_entries stream=codec_name,width,height,pix_fmt,color_space,color_transfer,color_primaries \
+  -of json './4k-sample/2026-united-states-grand-prix-F1 LIVE.mp4'
+
+# Decode the sample to check that its video is readable. No output means no decode errors.
+ffmpeg -v error -xerror \
+  -i './4k-sample/2026-united-states-grand-prix-F1 LIVE.mp4' \
+  -map 0:v:0 -f null -
+```
+
+Downloads copy the original codecs and HDR metadata without re-encoding or tone
+mapping. HDR samples need a suitable player/display for correct appearance.
+An advertised UHD manifest is not proof of playable media; checking a short sample
+verifies the actual output. Protected streams are still rejected.
 
 ## Manifest and 4K check (WSL)
 
@@ -279,6 +329,7 @@ Run `f1tv-dl --help` for all options. Original flags remain available: `-c`, `-i
 | `--token` | `F1TV_TOKEN` | Existing entitlement token |
 | `--check-manifest` | Off | Compare web/Android TV manifest resolutions and DRM |
 | `--json` | Off | Export a shareable JSON report with `--check-manifest` |
+| `--playback-profile` | `web` | `web` or `android-tv` (UHD/HDR when offered; browser session) |
 | `--login-method` | `password` | `password` or `browser` login |
 | `--session-file` | Platform cache | Session location |
 | `--no-cache` | Off | Disable session cache |
@@ -345,6 +396,9 @@ streams and FFmpeg progress, including required playback headers and matching
 browser identity across two queued downloads. Fragmented MP4 HLS tests also check
 browser origin headers on child playlists, initialization files, and segments,
 with primary and secondary audio inputs.
+The Android TV integration test generates a 3840x2160 10-bit HEVC HLS fixture,
+downloads ten-second samples through the CLI and desktop service, verifies HDR
+color metadata, and decodes both outputs. It requires the optional libx265 encoder.
 HTTPS integration tests verify trusted HLS downloads, reject an untrusted child
 playlist, and cover range requests, redirects, cleanup, and private relay access.
 Browser-flow tests use real Chromium with intercepted fixture pages and no live

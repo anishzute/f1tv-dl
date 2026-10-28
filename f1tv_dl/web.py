@@ -7,10 +7,17 @@ from dataclasses import dataclass
 
 from . import __version__
 from .config import BASE_URL
+from .errors import F1TVError
 
 # Public protocol versions from the supplied working browser recording.
 WEB_APP_VERSION = "55.0.5"
 WEB_PLAYER_VERSION = "8.212.0"
+PLAYBACK_PROFILES = ("web", "android-tv")
+
+
+def validate_playback_profile(profile):
+    if profile not in PLAYBACK_PROFILES:
+        raise F1TVError("Choose Web or Android TV as the playback profile.")
 
 
 def request_id():
@@ -59,10 +66,20 @@ class WebClient:
         )
         return cls(agent, device, request_id())
 
-    def headers(self):
+    def headers(self, profile="web"):
+        validate_playback_profile(profile)
+        device_info = self.device_info
+        if profile == "android-tv":
+            # Match the successful UHD manifest probe without altering the cached login identity.
+            device_info = ";".join(
+                [
+                    "device=android_tv",
+                    *(part for part in device_info.split(";") if not part.startswith("device=")),
+                ]
+            )
         return {
             "User-Agent": self.user_agent,
-            "x-f1-device-info": self.device_info,
+            "x-f1-device-info": device_info,
             "sessionid": self.session_id,
             "correlationid": request_id(),
         }

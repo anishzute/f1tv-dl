@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from test_models import FIXTURE, URL
 
+from f1tv_dl.api import F1TVClient
 from f1tv_dl.auth import SessionCredentials, SessionManager, SessionStore
 from f1tv_dl.cli import main
 from f1tv_dl.desktop import DesktopService, DownloadOptions
@@ -366,7 +367,9 @@ class FFmpegIntegrationTests(unittest.TestCase):
                 lambda: None,
                 token=SessionCredentials("entitlement", "subscription", WebClient.create(agent)),
             )
-            service.stream_url = lambda *args: base + "/cmaf/master.m3u8?token=private-fixture"
+            service.stream_url = lambda *args, **kwargs: (
+                base + "/cmaf/master.m3u8?token=private-fixture"
+            )
             content = Content.from_response(ContentRef.parse(URL), FIXTURE)
             with (
                 patch.dict(os.environ, {"SSL_CERT_FILE": str(certificate)}),
@@ -464,12 +467,193 @@ class FFmpegIntegrationTests(unittest.TestCase):
         self.assertEqual([s["codec_type"] for s in streams], ["video", "audio", "audio"])
         self.assertFalse(list(output.parent.glob("*.part*")))
 
+    def test_android_tv_cli_and_desktop_download_and_decode_ten_seconds_of_4k_hdr(self):
+        encoders = subprocess.run(
+            [self.ffmpeg, "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout
+        if "libx265" not in encoders:
+            self.skipTest("The optional 4K HDR fixture requires the libx265 encoder")
+        folder = self.root / "uhd"
+        folder.mkdir()
+        self.run_ffmpeg(
+            [
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:size=3840x2160:rate=1,format=yuv420p10le",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000",
+                "-t",
+                "12",
+                "-c:v",
+                "libx265",
+                "-preset",
+                "ultrafast",
+                "-threads",
+                "1",
+                "-x265-params",
+                "pools=1:frame-threads=1:bframes=0:keyint=1:log-level=error",
+                "-pix_fmt",
+                "yuv420p10le",
+                "-tag:v",
+                "hvc1",
+                "-color_primaries",
+                "bt2020",
+                "-color_trc",
+                "arib-std-b67",
+                "-colorspace",
+                "bt2020nc",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "32k",
+                "-metadata:s:a:0",
+                "language=eng",
+                str(folder / "source.mp4"),
+            ]
+        )
+        self.run_ffmpeg(
+            [
+                "-i",
+                str(folder / "source.mp4"),
+                "-map",
+                "0",
+                "-c",
+                "copy",
+                "-f",
+                "hls",
+                "-hls_segment_type",
+                "fmp4",
+                "-hls_playlist_type",
+                "vod",
+                "-hls_time",
+                "2",
+                "-master_pl_name",
+                "master.m3u8",
+                "-hls_segment_filename",
+                str(folder / "segment_%03d.mp4"),
+                str(folder / "video.m3u8"),
+            ]
+        )
+        api_calls = []
+        media_url = self.base_url + "/uhd/master.m3u8"
+
+        class AndroidTransport(HttpClient):
+            def get_json(transport, url, **kwargs):
+                if "/CONTENT/VIDEO/" in url:
+                    return FIXTURE
+                if "/CONTENT/PLAY" in url:
+                    api_calls.append(kwargs)
+                    if "device=android_tv;" not in kwargs["headers"]["x-f1-device-info"]:
+                        raise APIError("Playback authorization", 403)
+                    return {
+                        "resultObj": {
+                            "streamType": "HDR_UHD_CMAF",
+                            "url": self.base_url + "/wrong-default-feed.m3u8",
+                            "tme": {
+                                "feeds": [
+                                    {
+                                        "metadata": {"channel_id": kwargs["params"]["channelId"]},
+                                        "url": media_url,
+                                    }
+                                ]
+                            },
+                        }
+                    }
+                raise AssertionError("Unexpected external request")
+
+        transport = AndroidTransport()
+        credentials = SessionCredentials(
+            "fixture-entitlement",
+            "fixture-subscription",
+            WebClient.create("Chrome/154.0.0.0"),
+        )
+        with (
+            patch("f1tv_dl.cli.HttpClient", return_value=transport),
+            patch("f1tv_dl.cli.Authenticator.browser_login", return_value=credentials),
+        ):
+            status = main(
+                [
+                    URL,
+                    "-c",
+                    "F1 LIVE",
+                    "-i",
+                    "eng",
+                    "--playback-profile",
+                    "android-tv",
+                    "-s",
+                    "3840x2160",
+                    "--duration",
+                    "10",
+                    "--login-method",
+                    "browser",
+                    "--no-cache",
+                    "-o",
+                    str(folder / "cli"),
+                ]
+            )
+        self.assertEqual(status, 0)
+        service = DesktopService(session_path=folder / "session.json")
+        service.sessions = SessionManager(SessionStore(None), lambda: None, token=credentials)
+        service.http = transport
+        service.client = F1TVClient(transport)
+        content = Content.from_response(ContentRef.parse(URL), FIXTURE)
+        desktop_output = service.download(
+            content,
+            DownloadOptions(
+                folder / "desktop",
+                channel="F1 LIVE",
+                resolution="3840x2160",
+                duration=10,
+                playback_profile="android-tv",
+                international="eng",
+            ),
+        )
+        cli_output = folder / "cli/2026-united-states-grand-prix-F1 LIVE.mp4"
+        for output in (cli_output, desktop_output):
+            with self.subTest(output=output.name):
+                streams = self.inspect_output(output)
+                video = next(stream for stream in streams if stream["codec_type"] == "video")
+                self.assertEqual(sum(stream["codec_type"] == "audio" for stream in streams), 2)
+                self.assertEqual((video["width"], video["height"]), (3840, 2160))
+                self.assertEqual(video["codec_name"], "hevc")
+                self.assertEqual(video["pix_fmt"], "yuv420p10le")
+                self.assertEqual(video["color_primaries"], "bt2020")
+                self.assertEqual(video["color_transfer"], "arib-std-b67")
+                self.assertEqual(video["color_space"], "bt2020nc")
+                self.assertAlmostEqual(float(video["duration"]), 10, delta=0.1)
+                result = subprocess.run(
+                    [
+                        self.ffmpeg,
+                        "-v",
+                        "error",
+                        "-xerror",
+                        "-i",
+                        str(output),
+                        "-map",
+                        "0:v:0",
+                        "-f",
+                        "null",
+                        "-",
+                    ],
+                    capture_output=True,
+                    timeout=30,
+                )
+                self.assertEqual(result.returncode, 0, "The 4K output must decode without errors")
+        self.assertEqual(len(api_calls), 4)
+        self.assertIn("device=web;", credentials.web_client.device_info)
+
     def test_desktop_download_has_real_progress_and_two_audio_tracks(self):
         real_http = HttpClient()
         service = DesktopService(session_path=self.root / "desktop-session.json")
         service.sign_in("token", token="fixture-token")
         url = self.base_url + "/dash/master.mpd"
-        service.stream_url = lambda *args: url
+        service.stream_url = lambda *args, **kwargs: url
         service.http = real_http
         content = Content.from_response(ContentRef.parse(URL), FIXTURE)
         progress = []

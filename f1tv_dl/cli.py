@@ -19,6 +19,7 @@ from .http import HttpClient
 from .media import download, probe, require_binary, select_streams
 from .models import ContentRef, safe_filename
 from .relay import HLSRelay
+from .web import PLAYBACK_PROFILES
 
 LOG = logging.getLogger(__name__)
 
@@ -81,6 +82,12 @@ def parser():
     )
     command.add_argument("-t", "--itsoffset", type=time_offset, default="00:00:00.000")
     command.add_argument("-s", "--video-size", type=video_size, default="best")
+    command.add_argument(
+        "--playback-profile",
+        choices=PLAYBACK_PROFILES,
+        default="web",
+        help="Playback device profile; android-tv requests UHD/HDR when available (browser login)",
+    )
     command.add_argument("-f", "--format", choices=["mp4", "ts"], default="mp4")
     command.add_argument(
         "-o",
@@ -205,7 +212,7 @@ def run(args):
         report = check_manifests(http, content, channel, sessions)
         print(report.to_json() if args.json else report.to_text(), end="")
         return 0 if report.inspected else 1
-    playback = client.playback(content, channel, sessions)
+    playback = client.playback(content, channel, sessions, profile=args.playback_profile)
     if args.stream_url:
         print(playback.url)
         return
@@ -223,7 +230,12 @@ def run(args):
         )
         secondary = None
         if international is not None:
-            secondary_playback = client.playback(content, international, sessions)
+            secondary_playback = client.playback(
+                content,
+                international,
+                sessions,
+                profile=args.playback_profile,
+            )
             secondary_url = relay.prepare(
                 secondary_playback.url,
                 http.get_text(

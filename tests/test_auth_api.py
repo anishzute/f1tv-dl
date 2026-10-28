@@ -21,6 +21,7 @@ from f1tv_dl.auth import (
 )
 from f1tv_dl.errors import APIError, AuthenticationError, DRMError, F1TVError
 from f1tv_dl.models import Content, ContentRef
+from f1tv_dl.web import WebClient
 
 
 def jwt(exp):
@@ -206,6 +207,69 @@ class BrowserAuthTests(unittest.TestCase):
 
 
 class APITests(unittest.TestCase):
+    def test_android_tv_uses_the_successful_probe_profile_and_matching_uhd_feed(self):
+        context = WebClient.create("Mozilla/5.0 Chrome/154.0.0.0")
+        sessions = SessionManager(
+            SessionStore(None),
+            Mock(),
+            token=SessionCredentials("entitlement", "subscription", context),
+        )
+        self.http.get_json.return_value = {
+            "resultObj": {
+                "streamType": "HDR_UHD_CMAF",
+                "url": "https://cdn.test/default-hd.m3u8",
+                "tme": {
+                    "feeds": [
+                        {"metadata": {"channel_id": 1009}, "url": "https://cdn.test/driver.m3u8"},
+                        {"metadata": {"channel_id": 1025}, "url": "https://cdn.test/uhd.m3u8"},
+                    ]
+                },
+            }
+        }
+        playback = self.client.playback(
+            self.content,
+            self.content.select_channel("INTERNATIONAL"),
+            sessions,
+            profile="android-tv",
+        )
+        self.assertEqual(playback.url, "https://cdn.test/uhd.m3u8")
+        self.assertEqual(playback.stream_type, "HLS")
+        call = self.http.get_json.call_args
+        self.assertIn("/3.0/R/ENG/WEB_HLS/", call.args[0])
+        self.assertEqual(call.kwargs["params"]["channelId"], "1025")
+        headers = call.kwargs["headers"]
+        self.assertEqual(headers["ascendontoken"], "subscription")
+        self.assertEqual(headers["entitlementToken"], "entitlement")
+        self.assertIn("device=android_tv;", headers["x-f1-device-info"])
+        self.assertEqual(headers["User-Agent"], context.user_agent)
+        self.assertIn("device=web;", context.device_info)
+        self.assertEqual(context.headers()["x-f1-device-info"], context.device_info)
+
+    def test_android_tv_survives_a_single_token_refresh_and_still_rejects_drm(self):
+        self.sessions.subscription_token = "subscription"
+        self.sessions.web_client = WebClient.create()
+        self.http.get_json.side_effect = [APIError("Playback", 401), self.playback]
+        self.client.playback(self.content, None, self.sessions, profile="android-tv")
+        self.sessions.refresh.assert_called_once()
+        for call in self.http.get_json.call_args_list:
+            self.assertIn("device=android_tv;", call.kwargs["headers"]["x-f1-device-info"])
+        self.http.get_json.side_effect = None
+        self.http.get_json.return_value = {
+            "resultObj": {
+                "streamType": "HDR_UHD_CMAF",
+                "drmType": "Widevine",
+                "url": "https://cdn.test/protected.m3u8",
+            }
+        }
+        with self.assertRaises(DRMError):
+            self.client.playback(self.content, None, self.sessions, profile="android-tv")
+
+    def test_invalid_profile_and_legacy_android_tv_login_fail_before_playback_request(self):
+        for profile in ("invalid", "android-tv"):
+            with self.subTest(profile=profile), self.assertRaises(F1TVError):
+                self.client.playback(self.content, None, self.sessions, profile=profile)
+        self.http.get_json.assert_not_called()
+
     def setUp(self):
         self.http = Mock()
         self.client = F1TVClient(self.http)
@@ -283,7 +347,7 @@ class APITests(unittest.TestCase):
                 },
             }
         }
-        with self.assertRaisesRegex(F1TVError, "playback URL"):
+        with self.assertRaisesRegex(F1TVError, "selected feed"):
             self.client.playback(self.content, self.content.select_channel("VER"), sessions)
 
     def test_web_international_feed_uses_the_advertised_channel_id(self):
